@@ -1,5 +1,9 @@
 /* global console, document, Office */
 
+// ── CONFIG ────────────────────────────────────────────────────
+// Change this to match your exact top-level folder name in OneDrive
+const START_FOLDER_PATH = "BailBonds";
+
 let accessToken = null;
 let selectedFileId = null;
 let breadcrumbStack = [{ id: "root", name: "My Files" }];
@@ -33,7 +37,7 @@ function signIn() {
             accessToken = data.accessToken;
             showMainSection(data.userName);
             setStatus("");
-            await browseFolder("root");
+            await navigateToStartFolder(); // ← opens BailBonds directly
           } else {
             setStatus("Sign in error: " + data.message);
           }
@@ -56,6 +60,47 @@ function signOut() {
   document.getElementById("sign-in-section").style.display = "block";
   document.getElementById("main-section").style.display = "none";
   setStatus("");
+}
+
+// ── START FOLDER NAVIGATION ───────────────────────────────────
+async function navigateToStartFolder() {
+  setStatus(`Opening ${START_FOLDER_PATH}...`);
+
+  try {
+    // Resolve the named folder path to a Graph item ID
+    const response = await fetch(
+      `https://graph.microsoft.com/v1.0/me/drive/root:/${START_FOLDER_PATH}`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+
+    if (!response.ok) {
+      // Folder not found — fall back to OneDrive root gracefully
+      console.warn(`Folder "${START_FOLDER_PATH}" not found, falling back to root.`);
+      setStatus("");
+      breadcrumbStack = [{ id: "root", name: "My Files" }];
+      await browseFolder("root");
+      return;
+    }
+
+    const folder = await response.json();
+
+    // Build the breadcrumb to reflect we started inside BailBonds
+    breadcrumbStack = [
+      { id: "root", name: "My Files" },
+      { id: folder.id, name: folder.name },
+    ];
+
+    setStatus("");
+    await browseFolder(folder.id);
+
+  } catch (error) {
+    console.error("Failed to navigate to start folder:", error);
+    // Fall back to root on any unexpected error
+    breadcrumbStack = [{ id: "root", name: "My Files" }];
+    await browseFolder("root");
+  }
 }
 
 // ── FILE BROWSER ──────────────────────────────────────────────
