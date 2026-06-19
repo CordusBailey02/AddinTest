@@ -1,6 +1,8 @@
 /* global console, document, Office */
 
 let accessToken = null;
+let selectedFileId = null;
+let breadcrumbStack = [{ id: "root", name: "My Files" }];
 
 Office.onReady(() => {
   document.getElementById("sign-in-btn").onclick = signIn;
@@ -8,6 +10,7 @@ Office.onReady(() => {
   document.getElementById("read-file-btn").onclick = readFile;
 });
 
+// ── AUTH ─────────────────────────────────────────────────────
 function signIn() {
   setStatus("Opening sign in window...");
 
@@ -22,16 +25,15 @@ function signIn() {
 
       const dialog = result.value;
 
-      dialog.addEventHandler(Office.EventType.DialogMessageReceived, (msg) => {
+      dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (msg) => {
         dialog.close();
-
         try {
           const data = JSON.parse(msg.message);
-
           if (data.status === "success") {
             accessToken = data.accessToken;
             showMainSection(data.userName);
             setStatus("");
+            await browseFolder("root");
           } else {
             setStatus("Sign in error: " + data.message);
           }
@@ -41,9 +43,7 @@ function signIn() {
       });
 
       dialog.addEventHandler(Office.EventType.DialogEventReceived, (evt) => {
-        if (evt.error === 12006) {
-          setStatus("Sign in was cancelled.");
-        }
+        if (evt.error === 12006) setStatus("Sign in was cancelled.");
       });
     }
   );
@@ -51,30 +51,123 @@ function signIn() {
 
 function signOut() {
   accessToken = null;
+  selectedFileId = null;
+  breadcrumbStack = [{ id: "root", name: "My Files" }];
   document.getElementById("sign-in-section").style.display = "block";
   document.getElementById("main-section").style.display = "none";
   setStatus("");
 }
 
+// ── FILE BROWSER ──────────────────────────────────────────────
+async function browseFolder(folderId) {
+  const browser = document.getElementById("file-browser");
+  browser.innerHTML = "<div style='padding:12px;color:gray;'>Loading...</div>";
+
+  // Clear selected file when navigating
+  selectedFileId = null;
+  document.getElementById("selected-file").style.display = "none";
+  document.getElementById("read-file-btn").style.display = "none";
+  document.getElementById("output-section").style.display = "none";
+
+  try {
+    const url = folderId === "root"
+      ? "https://graph.microsoft.com/v1.0/me/drive/root/children"
+      : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children`;
+
+    const response = await fetch(url + "?$orderby=name&$select=id,name,folder,file,size", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      browser.innerHTML = `<div style='padding:12px;color:red;'>${err.error?.message || "Error loading files"}</div>`;
+      return;
+    }
+
+    const data = await response.json();
+    const items = data.value;
+
+    if (items.length === 0) {
+      browser.innerHTML = "<div style='padding:12px;color:gray;'>This folder is empty.</div>";
+      return;
+    }
+
+    browser.innerHTML = "";
+
+    items.forEach((item) => {
+      const isFolder = !!item.folder;
+      const isExcel = item.name?.endsWith(".xlsx") || item.name?.endsWith(".xls");
+
+      // Only show folders and Excel files
+      if (!isFolder && !isExcel) return;
+
+      const div = document.createElement("div");
+      div.className = "browser-item";
+      div.innerHTML = `
+        <span class="icon">${isFolder ? "📁" : "📗"}</span>
+        <span class="name">${item.name}</span>
+        ${isFolder ? '<span style="color:#aaa;font-size:11px;">▶</span>' : ""}
+      `;
+
+      div.onclick = () => {
+        if (isFolder) {
+          breadcrumbStack.push({ id: item.id, name: item.name });
+          updateBreadcrumb();
+          browseFolder(item.id);
+        } else {
+          // Select this file
+          document.querySelectorAll(".browser-item").forEach(el => el.classList.remove("selected"));
+          div.classList.add("selected");
+          selectedFileId = item.id;
+          document.getElementById("selected-file-name").textContent = item.name;
+          document.getElementById("selected-file").style.display = "block";
+          document.getElementById("read-file-btn").style.display = "inline-block";
+          setStatus("");
+        }
+      };
+
+      browser.appendChild(div);
+    });
+
+    updateBreadcrumb();
+
+  } catch (error) {
+    browser.innerHTML = `<div style='padding:12px;color:red;'>Error: ${error.message}</div>`;
+  }
+}
+
+function updateBreadcrumb() {
+  const breadcrumb = document.getElementById("breadcrumb");
+  breadcrumb.innerHTML = breadcrumbStack.map((crumb, index) => {
+    if (index === breadcrumbStack.length - 1) {
+      return `📁 ${crumb.name}`;
+    }
+    return `<span data-index="${index}">${crumb.name}</span> › `;
+  }).join("");
+
+  // Add click handlers for breadcrumb navigation
+  breadcrumb.querySelectorAll("span").forEach((span) => {
+    span.onclick = () => {
+      const index = parseInt(span.getAttribute("data-index"));
+      breadcrumbStack = breadcrumbStack.slice(0, index + 1);
+      browseFolder(breadcrumbStack[breadcrumbStack.length - 1].id);
+    };
+  });
+}
+
+// ── READ FILE ─────────────────────────────────────────────────
 async function readFile() {
-  const filePath = document.getElementById("file-path").value.trim();
-
-  if (!filePath) {
-    setStatus("Please enter a file path.");
+  if (!selectedFileId) {
+    setStatus("Please select a file first.");
     return;
   }
 
-  if (!accessToken) {
-    setStatus("Please sign in first.");
-    return;
-  }
-
-  setStatus("Fetching file data...");
+  setStatus("Reading file...");
   document.getElementById("output-section").style.display = "none";
 
   try {
     const response = await fetch(
-      `https://graph.microsoft.com/v1.0/me/drive/root:${filePath}:/workbook/worksheets/Sheet1/usedRange`,
+      `https://graph.microsoft.com/v1.0/me/drive/items/${selectedFileId}/workbook/worksheets/Sheet1/usedRange`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
       }
@@ -95,6 +188,7 @@ async function readFile() {
   }
 }
 
+// ── UI HELPERS ────────────────────────────────────────────────
 function showMainSection(userName) {
   document.getElementById("sign-in-section").style.display = "none";
   document.getElementById("main-section").style.display = "block";
@@ -113,18 +207,11 @@ function displayTable(values) {
   }
 
   const table = document.createElement("table");
-  table.style.borderCollapse = "collapse";
-  table.style.width = "100%";
-  table.style.fontSize = "12px";
-
   values.forEach((row, rowIndex) => {
     const tr = document.createElement("tr");
     row.forEach((cell) => {
       const td = document.createElement(rowIndex === 0 ? "th" : "td");
       td.textContent = cell;
-      td.style.border = "1px solid #ccc";
-      td.style.padding = "4px 8px";
-      if (rowIndex === 0) td.style.backgroundColor = "#f3f3f3";
       tr.appendChild(td);
     });
     table.appendChild(tr);

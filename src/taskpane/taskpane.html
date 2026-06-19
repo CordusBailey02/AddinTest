@@ -8,51 +8,80 @@
     <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
     <link rel="stylesheet" href="https://res-1.cdn.office.net/files/fabric-cdn-prod_20230815.002/office-ui-fabric-core/11.1.0/css/fabric.min.css"/>
     <link href="taskpane.css" rel="stylesheet" type="text/css" />
+    <style>
+        body { font-family: Segoe UI, sans-serif; font-size: 13px; margin: 0; padding: 0; }
+        header { background: #0078d4; color: white; padding: 12px 16px; }
+        header h1 { margin: 0; font-size: 16px; }
+        main { padding: 12px 16px; }
+        button {
+            background: #0078d4; color: white; border: none;
+            padding: 7px 14px; cursor: pointer; border-radius: 3px;
+            font-size: 12px; margin-top: 6px;
+        }
+        button:hover { background: #005fa3; }
+        button.secondary {
+            background: white; color: #0078d4;
+            border: 1px solid #0078d4; margin-left: 6px;
+        }
+        button.secondary:hover { background: #f0f6ff; }
+        #status { color: gray; font-size: 12px; margin: 8px 0; min-height: 16px; }
+        #breadcrumb { font-size: 12px; color: #555; margin-bottom: 6px; }
+        #breadcrumb span { cursor: pointer; color: #0078d4; }
+        #breadcrumb span:hover { text-decoration: underline; }
+        #file-browser { border: 1px solid #ddd; border-radius: 3px; max-height: 280px; overflow-y: auto; }
+        .browser-item {
+            display: flex; align-items: center; padding: 7px 10px;
+            cursor: pointer; border-bottom: 1px solid #f0f0f0;
+        }
+        .browser-item:hover { background: #f0f6ff; }
+        .browser-item .icon { margin-right: 8px; font-size: 16px; }
+        .browser-item .name { flex: 1; }
+        .browser-item.selected { background: #deeeff; }
+        #selected-file { font-size: 12px; color: #333; margin: 8px 0; padding: 6px; background: #f8f8f8; border-radius: 3px; display: none; }
+        table { border-collapse: collapse; width: 100%; font-size: 12px; }
+        th, td { border: 1px solid #ccc; padding: 4px 8px; }
+        th { background: #f3f3f3; }
+        #output-section { margin-top: 12px; }
+        .user-bar { font-size: 12px; color: #555; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+    </style>
 </head>
-<body class="ms-font-m ms-Fabric">
-
-    <header class="ms-welcome__header ms-bgColor-neutralLighter" style="padding: 16px; text-align: center;">
-        <h1 class="ms-font-xl">Excel Add-in</h1>
+<body>
+    <header>
+        <h1>Excel Add-in</h1>
     </header>
 
-    <main style="padding: 16px;">
-
+    <main>
         <!-- Sign in -->
         <div id="sign-in-section">
-            <p class="ms-font-m">Sign in with your Microsoft 365 account to get started.</p>
-            <button id="sign-in-btn" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Sign In</span>
-            </button>
+            <p>Sign in with your Microsoft 365 account to get started.</p>
+            <button id="sign-in-btn">Sign In</button>
         </div>
 
         <!-- Signed in -->
-        <div id="main-section" style="display: none;">
-            <p class="ms-font-m">Signed in as: <b><span id="user-name"></span></b></p>
-
-            <hr/>
-
-            <p class="ms-font-m">Enter the path to an Excel file in SharePoint:</p>
-            <input id="file-path" type="text" class="ms-TextField-field"
-                placeholder="/sites/YourSite/Shared Documents/YourFile.xlsx"
-                style="width: 100%; margin-bottom: 8px; padding: 6px;" />
-
-            <button id="read-file-btn" class="ms-Button ms-Button--primary" style="margin-bottom: 16px;">
-                <span class="ms-Button-label">Read File</span>
-            </button>
-
-            <div id="status" class="ms-font-s" style="margin-bottom: 8px; color: gray;"></div>
-
-            <div id="output-section" style="display: none;">
-                <h3 class="ms-font-l">Data from Sheet1:</h3>
-                <div id="output" style="overflow-x: auto;"></div>
+        <div id="main-section" style="display:none;">
+            <div class="user-bar">
+                <span>Signed in as <b id="user-name"></b></span>
+                <button class="secondary" id="sign-out-btn">Sign Out</button>
             </div>
 
-            <button id="sign-out-btn" class="ms-Button" style="margin-top: 24px;">
-                <span class="ms-Button-label">Sign Out</span>
-            </button>
+            <p style="margin: 0 0 6px 0; font-weight: 600;">Select a file from OneDrive:</p>
+
+            <div id="breadcrumb">📁 <span data-id="root">My Files</span></div>
+            <div id="file-browser">
+                <div style="padding: 12px; color: gray;">Loading...</div>
+            </div>
+
+            <div id="selected-file">📄 <span id="selected-file-name"></span></div>
+
+            <div id="status"></div>
+
+            <button id="read-file-btn" style="display:none;">Read Selected File</button>
+
+            <div id="output-section" style="display:none;">
+                <p style="font-weight: 600; margin: 12px 0 6px 0;">Data from Sheet1:</p>
+                <div style="overflow-x: auto;"><div id="output"></div></div>
+            </div>
         </div>
-
     </main>
-
 </body>
 </html>
