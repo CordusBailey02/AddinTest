@@ -17,7 +17,7 @@
     <Host Name="Workbook"/>
   </Hosts>
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://cordusbailey02.github.io/AddinTest/src/taskpane/taskpane.html"/>
+    <SourceLocation DefaultValue="https://cordusbailey02.github.io/AddinTest/taskpane.html"/>  
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
@@ -69,8 +69,8 @@
       </bt:Images>
       <bt:Urls>
         <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://go.microsoft.com/fwlink/?LinkId=276812"/>
-        <bt:Url id="Commands.Url" DefaultValue="https://cordusbailey02.github.io/AddinTest/src/commands/commands.html"/>
-        <bt:Url id="Taskpane.Url" DefaultValue="https://cordusbailey02.github.io/AddinTest/src/taskpane/taskpane.html"/>
+        <bt:Url id="Commands.Url" DefaultValue="https://cordusbailey02.github.io/AddinTest/commands.html"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://cordusbailey02.github.io/AddinTest/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="GetStarted.Title" DefaultValue="Get started with your add-in!"/>
