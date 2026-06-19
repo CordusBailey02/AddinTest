@@ -8,13 +8,21 @@ const msalConfig = {
   },
   cache: {
     cacheLocation: "sessionStorage",
+    storeAuthStateInCookie: true,
   },
 };
 
 async function handleAuth() {
   const msalInstance = new PublicClientApplication(msalConfig);
   await msalInstance.initialize();
-  await msalInstance.handleRedirectPromise();
+  
+  // This processes the auth code in the URL and signals back to the opener
+  const result = await msalInstance.handleRedirectPromise();
+  
+  if (result) {
+    // Successfully processed - close the popup
+    window.close();
+  }
 }
 
-handleAuth();
+handleAuth().catch(console.error);
