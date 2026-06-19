@@ -1,15 +1,14 @@
 /* global console, document, Office */
 import { PublicClientApplication } from "@azure/msal-browser";
 
-// ── CONFIG ────────────────────────────────────────────────────
 const msalConfig = {
   auth: {
     clientId: "0c472194-49de-476f-ad1f-8cd689bc60e9",
     authority: "https://login.microsoftonline.com/f285c292-6d27-443d-a1f0-dd70bcc4de16",
-    redirectUri: "https://cordusbailey02.github.io/AddinTest/auth.html",
+    redirectUri: "https://cordusbailey02.github.io/AddinTest/taskpane.html",
   },
   cache: {
-    cacheLocation: "sessionStorage",
+    cacheLocation: "localStorage",
     storeAuthStateInCookie: true,
   },
 };
@@ -20,59 +19,52 @@ const loginRequest = {
 
 const msalInstance = new PublicClientApplication(msalConfig);
 
-// ── OFFICE INIT ───────────────────────────────────────────────
 Office.onReady(async () => {
   await msalInstance.initialize();
 
-  // Handle redirect response if returning from login
-  await msalInstance.handleRedirectPromise();
+  // Handle the redirect response when returning from Microsoft login
+  const result = await msalInstance.handleRedirectPromise();
+
+  if (result) {
+    // Coming back from a redirect login - token acquired
+    msalInstance.setActiveAccount(result.account);
+    showMainSection(result.account.name || result.account.username);
+  } else {
+    // Check if already signed in
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+      msalInstance.setActiveAccount(accounts[0]);
+      showMainSection(accounts[0].name || accounts[0].username);
+    }
+  }
 
   document.getElementById("sign-in-btn").onclick = signIn;
   document.getElementById("sign-out-btn").onclick = signOut;
   document.getElementById("read-file-btn").onclick = readFile;
-
-  // If already signed in, go straight to main section
-  const account = msalInstance.getActiveAccount() || msalInstance.getAllAccounts()[0];
-  if (account) {
-    msalInstance.setActiveAccount(account);
-    showMainSection(account.name || account.username);
-  }
 });
 
-// ── AUTH ──────────────────────────────────────────────────────
 async function signIn() {
-  try {
-    setStatus("Signing in...");
-    const result = await msalInstance.loginPopup(loginRequest);
-    msalInstance.setActiveAccount(result.account);
-    showMainSection(result.account.name || result.account.username);
-    setStatus("");
-  } catch (error) {
-    setStatus("Sign in failed: " + error.message);
-    console.error(error);
-  }
+  // Use redirect instead of popup - works reliably in Office add-ins
+  await msalInstance.loginRedirect(loginRequest);
 }
 
 function signOut() {
-  msalInstance.logoutPopup();
-  document.getElementById("sign-in-section").style.display = "block";
-  document.getElementById("main-section").style.display = "none";
+  msalInstance.logoutRedirect();
 }
 
 async function getToken() {
   const account = msalInstance.getActiveAccount();
   try {
-    // Try silent first
-    const result = await msalInstance.acquireTokenSilent({ ...loginRequest, account });
+    const result = await msalInstance.acquireTokenSilent({
+      ...loginRequest,
+      account,
+    });
     return result.accessToken;
   } catch {
-    // Fall back to popup
-    const result = await msalInstance.acquireTokenPopup(loginRequest);
-    return result.accessToken;
+    await msalInstance.acquireTokenRedirect(loginRequest);
   }
 }
 
-// ── READ SHAREPOINT FILE ──────────────────────────────────────
 async function readFile() {
   const filePath = document.getElementById("file-path").value.trim();
 
@@ -86,10 +78,7 @@ async function readFile() {
 
   try {
     const token = await getToken();
-
-    // Get the default SharePoint drive for the tenant root
-    // File path should be like: /sites/SiteName/Shared Documents/File.xlsx
-    const encodedPath = encodeURIComponent(filePath);
+    if (!token) return; // redirect in progress
 
     const response = await fetch(
       `https://graph.microsoft.com/v1.0/me/drive/root:${filePath}:/workbook/worksheets/Sheet1/usedRange`,
@@ -107,14 +96,12 @@ async function readFile() {
     const data = await response.json();
     displayTable(data.values);
     setStatus("Data loaded successfully.");
-
   } catch (error) {
     setStatus("Failed to read file: " + error.message);
     console.error(error);
   }
 }
 
-// ── UI HELPERS ────────────────────────────────────────────────
 function showMainSection(userName) {
   document.getElementById("sign-in-section").style.display = "none";
   document.getElementById("main-section").style.display = "block";
