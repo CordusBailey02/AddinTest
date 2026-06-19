@@ -1,68 +1,59 @@
 /* global console, document, Office */
-import { PublicClientApplication } from "@azure/msal-browser";
 
-const msalConfig = {
-  auth: {
-    clientId: "0c472194-49de-476f-ad1f-8cd689bc60e9",
-    authority: "https://login.microsoftonline.com/f285c292-6d27-443d-a1f0-dd70bcc4de16",
-    redirectUri: "https://cordusbailey02.github.io/AddinTest/taskpane.html",
-  },
-  cache: {
-    cacheLocation: "localStorage",
-    storeAuthStateInCookie: true,
-  },
-};
+let accessToken = null;
 
-const loginRequest = {
-  scopes: ["User.Read", "Files.Read", "Files.Read.All", "Sites.Read.All"],
-};
-
-const msalInstance = new PublicClientApplication(msalConfig);
-
-Office.onReady(async () => {
-  await msalInstance.initialize();
-
-  // Handle the redirect response when returning from Microsoft login
-  const result = await msalInstance.handleRedirectPromise();
-
-  if (result) {
-    // Coming back from a redirect login - token acquired
-    msalInstance.setActiveAccount(result.account);
-    showMainSection(result.account.name || result.account.username);
-  } else {
-    // Check if already signed in
-    const accounts = msalInstance.getAllAccounts();
-    if (accounts.length > 0) {
-      msalInstance.setActiveAccount(accounts[0]);
-      showMainSection(accounts[0].name || accounts[0].username);
-    }
-  }
-
+Office.onReady(() => {
   document.getElementById("sign-in-btn").onclick = signIn;
   document.getElementById("sign-out-btn").onclick = signOut;
   document.getElementById("read-file-btn").onclick = readFile;
 });
 
-async function signIn() {
-  // Use redirect instead of popup - works reliably in Office add-ins
-  await msalInstance.loginRedirect(loginRequest);
+function signIn() {
+  setStatus("Opening sign in window...");
+
+  Office.context.ui.displayDialogAsync(
+    "https://cordusbailey02.github.io/AddinTest/dialog.html",
+    { height: 60, width: 30, promptBeforeOpen: false },
+    (result) => {
+      if (result.status === Office.AsyncResultStatus.Failed) {
+        setStatus("Failed to open dialog: " + result.error.message);
+        return;
+      }
+
+      const dialog = result.value;
+
+      dialog.addEventHandler(Office.EventType.DialogMessageReceived, (msg) => {
+        dialog.close();
+
+        try {
+          const data = JSON.parse(msg.message);
+
+          if (data.status === "success") {
+            accessToken = data.accessToken;
+            showMainSection(data.userName);
+            setStatus("");
+          } else {
+            setStatus("Sign in error: " + data.message);
+          }
+        } catch (e) {
+          setStatus("Error parsing auth response.");
+        }
+      });
+
+      dialog.addEventHandler(Office.EventType.DialogEventReceived, (evt) => {
+        if (evt.error === 12006) {
+          setStatus("Sign in was cancelled.");
+        }
+      });
+    }
+  );
 }
 
 function signOut() {
-  msalInstance.logoutRedirect();
-}
-
-async function getToken() {
-  const account = msalInstance.getActiveAccount();
-  try {
-    const result = await msalInstance.acquireTokenSilent({
-      ...loginRequest,
-      account,
-    });
-    return result.accessToken;
-  } catch {
-    await msalInstance.acquireTokenRedirect(loginRequest);
-  }
+  accessToken = null;
+  document.getElementById("sign-in-section").style.display = "block";
+  document.getElementById("main-section").style.display = "none";
+  setStatus("");
 }
 
 async function readFile() {
@@ -73,17 +64,19 @@ async function readFile() {
     return;
   }
 
+  if (!accessToken) {
+    setStatus("Please sign in first.");
+    return;
+  }
+
   setStatus("Fetching file data...");
   document.getElementById("output-section").style.display = "none";
 
   try {
-    const token = await getToken();
-    if (!token) return; // redirect in progress
-
     const response = await fetch(
       `https://graph.microsoft.com/v1.0/me/drive/root:${filePath}:/workbook/worksheets/Sheet1/usedRange`,
       {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       }
     );
 

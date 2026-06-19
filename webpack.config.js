@@ -20,7 +20,7 @@ module.exports = async (env, options) => {
       polyfill: ["core-js/stable", "regenerator-runtime/runtime"],
       taskpane: ["./src/taskpane/taskpane.js", "./src/taskpane/taskpane.html"],
       commands: "./src/commands/commands.js",
-      auth: ["./src/taskpane/auth.js", "./src/taskpane/auth.html"],
+      dialog: ["./src/taskpane/dialog.js", "./src/taskpane/dialog.html"],
     },
     output: {
       clean: true,
@@ -59,9 +59,9 @@ module.exports = async (env, options) => {
         chunks: ["polyfill", "taskpane"],
       }),
       new HtmlWebpackPlugin({
-        filename: "auth.html",
-        template: "./src/taskpane/auth.html",
-        chunks: ["polyfill", "auth"],
+        filename: "dialog.html",
+        template: "./src/taskpane/dialog.html",
+        chunks: ["polyfill", "dialog"],
       }),
       new CopyWebpackPlugin({
         patterns: [
