@@ -46,6 +46,7 @@ function signIn() {
             showMainSection(data.userName);
             setStatus("");
             await navigateToStartFolder();
+            await navigateToStartFolderPayments();
           } else {
             setStatus("Sign in error: " + data.message);
           }
@@ -81,7 +82,7 @@ async function navigateToStartFolderPayments() {
     );
     if(!response.ok) {
       breadcrumbStackPayments = [{ id: "root", name: "Payments Files" }];
-      await browseFolderPayments("root");
+      await browsePaymentsFolder("root");
       return;
     }
     const folder = await response.json();
@@ -174,7 +175,7 @@ async function browsePaymentsFolder(folderId) {
         if (isFolder) {
           breadcrumbStackPayments.push({ id: item.id, name: item.name });
           updateBreadcrumbPayments();
-          browseFolderPayments(item.id);
+          browsePaymentsFolder(item.id);
         } else {
           document.querySelectorAll("#payments-file-browser .browser-item").forEach(el => el.classList.remove("selected"));
           div.classList.add("selected");
@@ -384,7 +385,7 @@ async function previewPaymentsImport() {
   }
 
   setPaymentsStatus("Reading payments...");
-  document.getElementById("preview-payments=section").style.display = "none";
+  document.getElementById("preview-payments-section").style.display = "none";
 
   try {
     const payments = await readPaymentsData(selectedPaymentsFileId);
