@@ -10,7 +10,7 @@ let selectedPaymentsFileId = null;
 let pendingImportRows = [];
 let pendingImportPaymentRows = [];
 let breadcrumbStack = [{ id: "root", name: "My Files" }];
-let breadcrumbStackPayments = [{ id: "root", name: "Payments Files" }];
+let breadcrumbStackPayments = [{ id: "root", name: "My Files" }];
 
 // ── OFFICE INIT ───────────────────────────────────────────────
 Office.onReady(() => {
@@ -81,19 +81,19 @@ async function navigateToStartFolderPayments() {
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     if(!response.ok) {
-      breadcrumbStackPayments = [{ id: "root", name: "Payments Files" }];
+      breadcrumbStackPayments = [{ id: "root", name: "My Files" }];
       await browsePaymentsFolder("root");
       return;
     }
     const folder = await response.json();
     breadcrumbStackPayments = [
-      { id: "root", name: "Payments Files" },
+      { id: "root", name: "My Files" },
       { id: folder.id, name: folder.name },
     ];
     setPaymentsStatus("");
     await browsePaymentsFolder(folder.id);
   } catch (error) {
-    breadcrumbStackPayments = [{ id: "root", name: "Payments Files"} ];
+    breadcrumbStackPayments = [{ id: "root", name: "My Files"} ];
     await browsePaymentsFolder("root");
   }
 }
