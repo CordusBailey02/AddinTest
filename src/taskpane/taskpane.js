@@ -2,7 +2,6 @@
 
 // ── CONFIG ────────────────────────────────────────────────────
 const START_FOLDER_PATH = "BailBonds/EmployeeSubmissions";
-const START_FOLDER_PATH_PAYMENTS = "BailBonds/Payments";
 
 let accessToken = null;
 let selectedFileId = null;
