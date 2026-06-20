@@ -176,7 +176,7 @@ async function browsePaymentsFolder(folderId) {
           updateBreadcrumbPayments();
           browseFolderPayments(item.id);
         } else {
-          document.querySelectorAll("#file-browser .browser-item").forEach(el => el.classList.remove("selected"));
+          document.querySelectorAll("#payments-file-browser .browser-item").forEach(el => el.classList.remove("selected"));
           div.classList.add("selected");
           selectedPaymentsFileId = item.id;
           document.getElementById("selected-payments-file-name").textContent = item.name;
