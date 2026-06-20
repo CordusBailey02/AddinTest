@@ -2,11 +2,15 @@
 
 // ── CONFIG ────────────────────────────────────────────────────
 const START_FOLDER_PATH = "BailBonds/EmployeeSubmissions";
+const START_FOLDER_PATH_PAYMENTS = "BailBonds/Payments";
 
 let accessToken = null;
 let selectedFileId = null;
+let selectedPaymentsFileId = null;
 let pendingImportRows = [];
+let pendingImportPaymentRows = [];
 let breadcrumbStack = [{ id: "root", name: "My Files" }];
+let breadcrumbStackPayments = [{ id: "root", name: "Payments Files" }];
 
 // ── OFFICE INIT ───────────────────────────────────────────────
 Office.onReady(() => {
@@ -15,6 +19,10 @@ Office.onReady(() => {
   document.getElementById("preview-btn").onclick = previewImport;
   document.getElementById("confirm-import-btn").onclick = confirmImport;
   document.getElementById("cancel-import-btn").onclick = cancelImport;
+
+  document.getElementById("preview-payments-btn").onclick = previewPaymentsImport;
+  //document.getElementById("confirm-payments-import-btn").onclick = confirmPaymentsImport;
+  //document.getElementById("cancel-payments-import-btn").onclick = cancelPaymentsImport;
 });
 
 // ── AUTH ─────────────────────────────────────────────────────
@@ -55,12 +63,38 @@ function signIn() {
 function signOut() {
   accessToken = null;
   selectedFileId = null;
+  selectedPaymentsFileId = null;
   pendingImportRows = [];
   breadcrumbStack = [{ id: "root", name: "My Files" }];
   document.getElementById("sign-in-section").style.display = "block";
   document.getElementById("main-section").style.display = "none";
   document.getElementById("preview-section").style.display = "none";
   setStatus("");
+}
+
+async function navigateToStartFolderPayments() {
+  setPaymentsStatus(`Opening ${START_FOLDER_PATH_PAYMENTS}...`)
+  try {
+    const response = await fetch(
+      `https://graph.microsoft.com/v1.0/me/drive/root:/${START_FOLDER_PATH_PAYMENTS}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if(!response.ok) {
+      breadcrumbStackPayments = [{ id: "root", name: "Payments Files" }];
+      await browseFolderPayments("root");
+      return;
+    }
+    const folder = await response.json();
+    breadcrumbStackPayments = [
+      { id: "root", name: "Payments Files" },
+      { id: folder.id, name: folder.name },
+    ];
+    setPaymentsStatus("");
+    await browsePaymentsFolder(folder.id);
+  } catch (error) {
+    breadcrumbStackPayments = [{ id: "root", name: "Payments Files"} ];
+    await browsePaymentsFolder("root");
+  }
 }
 
 // ── START FOLDER ──────────────────────────────────────────────
@@ -86,6 +120,77 @@ async function navigateToStartFolder() {
   } catch (error) {
     breadcrumbStack = [{ id: "root", name: "My Files" }];
     await browseFolder("root");
+  }
+}
+
+async function browsePaymentsFolder(folderId) {
+  const browser = document.getElementById("payments-file-browser")
+  browser.innerHTML = "<div style='padding:12px;color:gray;'>Loading...</div>";
+
+  selectedPaymentsFileId = null;
+  document.getElementById("selected-payments-file").style.display = "none";
+  document.getElementById("preview-payments-btn").style.display = "none";
+  document.getElementById("preview-payments-section").style.display = "none";
+
+  try {
+    const url = folderId === "root"
+      ? "https://graph.microsoft.com/v1.0/me/drive/root/children"
+      : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children`;
+
+    const response = await fetch(
+      url + + "?$orderby=name&$select=id,name,folder,file,size",
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    if(!response.ok) {
+      const err = await response.json();
+      browser.innerHTML = `<div style='padding:12px;color:red;'>${err.error?.message || "Error loading files"}</div>`;
+      return;
+    }
+
+    const data = await response.json();
+    const items = data.value;
+
+    if (items.length === 0) {
+      browser.innerHTML = "<div style='padding:12px;color:gray;'>This folder is empty.</div>";
+      return;
+    }
+
+    browser.innerHTML = "";
+    items.forEach((item) => {
+      const isFolder = !!item.folder;
+      const isExcel = item.name?.endsWith(".xlsx") || item.name?.endsWith(".xls");
+      if (!isFolder && !isExcel) return;
+
+      const div = document.createElement("div");
+      div.className = "browser-item";
+      div.innerHTML = `
+        <span class="icon">${isFolder ? "📁" : "📗"}</span>
+        <span class="name">${item.name}</span>
+        ${isFolder ? '<span style="color:#aaa;font-size:11px;">▶</span>' : ""}
+      `;
+
+      div.onclick = () => {
+        if (isFolder) {
+          breadcrumbStackPayments.push({ id: item.id, name: item.name });
+          updateBreadcrumbPayments();
+          browseFolderPayments(item.id);
+        } else {
+          document.querySelectorAll("#file-browser .browser-item").forEach(el => el.classList.remove("selected"));
+          div.classList.add("selected");
+          selectedPaymentsFileId = item.id;
+          document.getElementById("selected-payments-file-name").textContent = item.name;
+          document.getElementById("selected-payments-file").style.display = "block";
+          document.getElementById("preview-payments-btn").style.display = "inline-block";
+          setPaymentsStatus("");
+        }
+      };
+      browser.appendChild(div);
+    });
+
+    updateBreadcrumbPayments();
+  } catch (error) {
+    browser.innerHTML = `<div style='padding:12px;color:red;'>Error: ${error.message}</div>`;
   }
 }
 
@@ -161,6 +266,22 @@ async function browseFolder(folderId) {
   }
 }
 
+function updateBreadcrumbPayments() {
+  const breadcrumb = document.getElementById("payments-breadcrumb");
+  breadcrumb.innerHTML = breadcrumbStackPayments.map((crumb, index) => {
+    if(index === breadcrumbStackPayments.length - 1) return `📁 ${crumb.name}`;
+    return `<span data-index="${index}">${crumb.name}</span> › `;
+  }).join("");
+
+  breadcrumb.querySelectorAll("span").forEach((span) => {
+    span.onclick = () => {
+      const index = parseInt(span.getAttribute("data-index"));
+      breadcrumbStackPayments = breadcrumbStackPayments.slice(0, index + 1);
+      browsePaymentsFolder(breadcrumbStackPayments[breadcrumbStackPayments.length - 1].id);
+    };
+  });
+}
+
 function updateBreadcrumb() {
   const breadcrumb = document.getElementById("breadcrumb");
   breadcrumb.innerHTML = breadcrumbStack.map((crumb, index) => {
@@ -175,6 +296,38 @@ function updateBreadcrumb() {
       browseFolder(breadcrumbStack[breadcrumbStack.length - 1].id);
     };
   });
+}
+
+async function readPaymentsData(fileId) {
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/workbook/worksheets/Sheet1/usedRange`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+
+  if(!response.ok) {
+    const error = await response.json();
+    throw new Error(err.error?.message || "Failed to read payments file");
+  }
+
+  const data = await response.json();
+  const rows = data.values;
+
+  const dataRows = rows.slice(3);
+
+  const payments = [];
+  for (const row of dataRows) {
+    const test1 = row[2];
+
+    // Skip empty rows and totals row
+    if (!test1) continue;
+    if (String(test1).toUpperCase().includes("TOTAL")) continue;
+
+    payments.push({
+      payments,
+    });
+  }
+
+  return payments
 }
 
 // ── READ SUBMISSION FILE ──────────────────────────────────────
@@ -222,6 +375,45 @@ async function readSubmissionData(fileId) {
   }
 
   return bonds;
+}
+
+async function previewPaymentsImport() {
+  if(!selectedPaymentsFileId) {
+    setPaymentsStatus("Please select a payments file first.")
+    return;
+  }
+
+  setPaymentsStatus("Reading payments...");
+  document.getElementById("preview-payments=section").style.display = "none";
+
+  try {
+    const payments = await readPaymentsData(selectedPaymentsFileId);
+
+    if(payments.length === 0) {
+      setPaymentsStatus("No payment entries found in the payments file.");
+      return;
+    }
+
+    pendingImportPaymentRows = payments;
+
+    const tbody = document.getElementById("preview-payments-tbody");
+    tbody.innerHTML = "";
+    payments.forEach((payment) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${payment.test1}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    document.getElementById("import-payments-summary").style.display = "none";
+    document.getElementById("preview-payments-section").style.dsiplay = "block";
+    document.getElementById("confirm-payments-import-btn").disabled = false;
+    setPaymentsStatus(`${payments.length} payment${payments.length > 1 ? "s" : ""} ready to import.`);
+  } catch (error) {
+    setPaymentsStatus("Error reading payments: " + error.message);
+    console.error(error);
+  }
 }
 
 // ── PREVIEW IMPORT ────────────────────────────────────────────
@@ -407,4 +599,8 @@ function showMainSection(userName) {
 
 function setStatus(message) {
   document.getElementById("status").textContent = message;
+}
+
+function setPaymentsStatus(message) {
+  document.getElementById("payments-status").textContent = message;
 }
