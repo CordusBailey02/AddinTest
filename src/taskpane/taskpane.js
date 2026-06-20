@@ -286,31 +286,72 @@ async function confirmImport() {
 
   try {
     await Excel.run(async (context) => {
-      // Get the PaymentsTable in the PAYMENTS sheet
       const table = context.workbook.tables.getItem("PaymentsTable");
-      table.load("name");
+      const bodyRange = table.getDataBodyRange();
+      bodyRange.load("values, rowCount, columnCount");
       await context.sync();
 
-      for (const bond of pendingImportRows) {
-        // Add a new row to the table body
-        // Excel Tables automatically keep the Total Row at the bottom
-        // Structured reference formulas copy down automatically
-        // Pass null for formula columns — the table copies them from existing rows
-        table.rows.add(null, [[
-          bond.client,       // A - CLIENT
-          bond.ttlBond,      // B - TTL BOND
-          bond.amtCharged,   // C - AMT CHARGED
-          bond.amtCollected, // D - AMT COLLECTED
-          bond.expense,      // E - EXPENSE
-          "",                // F - % PAID ON BOND (owner fills manually)
-          bond.startBalance, // G - START BALANCE
-          "",                // H - AMT OF PAYMENT (secretary later)
-          "",                // I - END BALANCE (structured formula copies automatically)
-          "",                // J - BALANCE OWED
-          "",                // K - ENDING BALANCE (structured formula copies automatically)
-          "",                // L - PAYMENT (structured formula copies automatically)
-          "",                // M - REACH
-        ]]);
+      // ── STEP 1: Compact — collect all non-empty rows ──────────
+      const existingRows = bodyRange.values;
+      const compacted = existingRows.filter(row => {
+        // A row is considered empty if the CLIENT column (index 0) is blank
+        const clientVal = row[0];
+        return clientVal !== null && clientVal !== "" && clientVal !== undefined;
+      });
+
+      // ── STEP 2: Build the new rows to add ─────────────────────
+      const newRows = pendingImportRows.map(bond => {
+        const row = new Array(bodyRange.columnCount).fill("");
+        row[0]  = bond.client;        // A - CLIENT
+        row[1]  = bond.ttlBond;       // B - TTL BOND
+        row[2]  = bond.amtCharged;    // C - AMT CHARGED
+        row[3]  = bond.amtCollected;  // D - AMT COLLECTED
+        row[4]  = bond.expense;       // E - EXPENSE
+        row[5]  = "";                 // F - % PAID ON BOND (manual)
+        row[6]  = bond.startBalance;  // G - START BALANCE
+        row[7]  = "";                 // H - AMT OF PAYMENT (secretary later)
+        row[8]  = "";                 // I - END BALANCE (formula)
+        row[9]  = "";                 // J - BALANCE OWED
+        row[10] = "";                 // K - ENDING BALANCE (formula)
+        row[11] = "";                 // L - PAYMENT (formula)
+        row[12] = "";                 // M - REACH
+        return row;
+      });
+
+      // ── STEP 3: Write compacted + new rows back to the table ──
+      const allRows = [...compacted, ...newRows];
+
+      // If the table needs to grow, add blank rows first
+      const currentRowCount = bodyRange.rowCount;
+      const neededRowCount = allRows.length;
+
+      if (neededRowCount > currentRowCount) {
+        const rowsToAdd = neededRowCount - currentRowCount;
+        for (let i = 0; i < rowsToAdd; i++) {
+          table.rows.add(null, [new Array(bodyRange.columnCount).fill("")]);
+        }
+        await context.sync();
+      }
+
+      // Re-load body range after potential row additions
+      const updatedBodyRange = table.getDataBodyRange();
+      updatedBodyRange.load("values, rowCount");
+      await context.sync();
+
+      // Write all rows back (compacted existing + new)
+      const writeRange = updatedBodyRange.getResizedRange(0, 0);
+      
+      // Write only the rows we have data for
+      const finalRange = table.getDataBodyRange().getCell(0, 0)
+        .getResizedRange(allRows.length - 1, bodyRange.columnCount - 1);
+      finalRange.values = allRows;
+
+      // Clear any remaining rows below our data if table shrank
+      if (currentRowCount > neededRowCount) {
+        const clearRange = table.getDataBodyRange()
+          .getCell(allRows.length, 0)
+          .getResizedRange(currentRowCount - neededRowCount - 1, bodyRange.columnCount - 1);
+        clearRange.clear(Excel.ClearType.contents);
       }
 
       await context.sync();
