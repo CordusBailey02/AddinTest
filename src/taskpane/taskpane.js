@@ -347,7 +347,7 @@ async function confirmImport() {
         const leftoverCount = freshBody.rowCount - neededRowCount;
         const clearRange = freshBody.getCell(neededRowCount, 0)
           .getResizedRange(leftoverCount - 1, colCount - 1);
-        clearRange.clear(Excel.ClearType.contents);
+        clearRange.clear("Contents");
       }
 
       await context.sync();
