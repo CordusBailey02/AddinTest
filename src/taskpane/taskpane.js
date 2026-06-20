@@ -415,25 +415,33 @@ async function previewPaymentsImport() {
     return;
   }
 
-  setPaymentsStatus("Reading daily ledger...");
+  setPaymentsStatus("Diagnosing...");
 
   try {
+    // Check what we read from B2
+    const { initials, fullName } = await getEmployeeInitials();
+    
+    // Check what's in the ledger BONDSMAN column
     const response = await fetch(
       `https://graph.microsoft.com/v1.0/me/drive/items/${selectedPaymentsFileId}/workbook/worksheets/Sheet1/usedRange`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const data = await response.json();
     const rows = data.values;
+    const dataRows = rows.slice(2);
+    
+    const bondsmanValues = dataRows
+      .map(r => r[5])
+      .filter(v => v !== null && v !== "" && v !== undefined);
 
-    // Log every row so we can see exactly what Graph is returning
-    rows.forEach((row, i) => {
-      console.log(`Row ${i}: ${JSON.stringify(row)}`);
-    });
-
-    setPaymentsStatus(`Rows found: ${rows.length}. Check console for details.`);
+    setPaymentsStatus(
+      `B2 value: "${fullName}" → initials: "${initials}" | ` +
+      `Bondsman values in file: ${JSON.stringify(bondsmanValues)}`
+    );
 
   } catch (error) {
     setPaymentsStatus("Error: " + error.message);
+    console.error(error);
   }
 }
 
