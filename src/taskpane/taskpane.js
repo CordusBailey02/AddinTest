@@ -328,37 +328,26 @@ async function readSecretaryPayments(fileId, employeeInitials) {
   const data = await response.json();
   const rows = data.values;
 
-  // Row 1 = date, Row 2 = headers, Row 3+ = data
-  // Headers: CLIENT | AMOUNT | FORM | RCPT# | CASHIER | BONDSMAN | BALANCE | ...
-  const headerRow = rows[1] || [];
+  // Row 0 = date, Row 1 = headers, Row 2+ = data
+  // Based on confirmed structure:
+  // Index 0 = CLIENT, 1 = AMOUNT, 5 = BONDSMAN
+  const CLIENT_COL   = 0;
+  const AMOUNT_COL   = 1;
+  const BONDSMAN_COL = 5;
 
-  // Find column indices dynamically from the header row
-  const colIndex = (name) => headerRow.findIndex(h =>
-    String(h || "").toUpperCase().trim() === name.toUpperCase()
-  );
-
-  const clientCol   = colIndex("CLIENT");
-  const amountCol   = colIndex("AMOUNT");
-  const bondsmanCol = colIndex("BONDSMAN");
-
-  if (clientCol === -1 || amountCol === -1 || bondsmanCol === -1) {
-    throw new Error(
-      `Could not find required columns. Found headers: ${headerRow.filter(Boolean).join(", ")}`
-    );
-  }
-
-  const dataRows = rows.slice(2); // skip date row and header row
+  const dataRows = rows.slice(2);
   const matched = [];
 
   for (const row of dataRows) {
-    const client   = String(row[clientCol]   || "").trim();
-    const amount   = row[amountCol];
-    const bondsman = String(row[bondsmanCol] || "").trim().toUpperCase();
+    const client   = String(row[CLIENT_COL]   ?? "").trim();
+    const amount   = row[AMOUNT_COL];
+    const bondsman = String(row[BONDSMAN_COL] ?? "").trim().toUpperCase();
 
     // Skip empty rows
-    if (!client || amount === null || amount === "" || amount === undefined) continue;
+    if (!client) continue;
+    if (amount === null || amount === "" || amount === undefined) continue;
 
-    // Only include rows that match this employee's initials
+    // Only include rows matching this employee's initials
     if (bondsman !== employeeInitials.toUpperCase()) continue;
 
     matched.push({
@@ -415,28 +404,86 @@ async function previewPaymentsImport() {
     return;
   }
 
-  setPaymentsStatus("Diagnosing...");
+  setPaymentsStatus("Reading daily ledger...");
+  document.getElementById("preview-payments-section").style.display = "none";
 
   try {
-    // Check what we read from B2
     const { initials, fullName } = await getEmployeeInitials();
-    
-    // Check what's in the ledger BONDSMAN column
-    const response = await fetch(
-      `https://graph.microsoft.com/v1.0/me/drive/items/${selectedPaymentsFileId}/workbook/worksheets/Sheet1/usedRange`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const data = await response.json();
-    const rows = data.values;
-    const dataRows = rows.slice(2);
-    
-    const bondsmanValues = dataRows
-      .map(r => r[5])
-      .filter(v => v !== null && v !== "" && v !== undefined);
+    document.getElementById("detected-employee").textContent = `${fullName} (${initials})`;
+    document.getElementById("employee-badge").style.display = "block";
+
+    const matched = await readSecretaryPayments(selectedPaymentsFileId, initials);
+
+    if (matched.length === 0) {
+      setPaymentsStatus(`No payments found for bondsman "${initials}" in this file.`);
+      return;
+    }
+
+    const tableRows = await Excel.run(async (context) => {
+      const table = context.workbook.tables.getItem("PaymentsTable");
+      const bodyRange = table.getDataBodyRange();
+      bodyRange.load("values");
+      await context.sync();
+      return bodyRange.values;
+    });
+
+    const paymentsTableClients = tableRows.map((row, idx) => ({
+      rowIndex: idx,
+      client:              String(row[0]  || "").toUpperCase().trim(),
+      currentStartBalance: row[6],
+      currentEndBalance:   row[8],
+    }));
+
+    const previews = [];
+    const unmatched = [];
+
+    for (const payment of matched) {
+      const tableMatch = paymentsTableClients.find(
+        r => r.client === payment.client && r.client !== ""
+      );
+
+      if (tableMatch) {
+        previews.push({
+          client:       payment.client,
+          amount:       payment.amount,
+          rowIndex:     tableMatch.rowIndex,
+          startBalance: tableMatch.currentStartBalance,
+          projectedEnd: (Number(tableMatch.currentStartBalance) || 0) - payment.amount,
+        });
+      } else {
+        unmatched.push(payment.client);
+      }
+    }
+
+    pendingPaymentRows = previews;
+
+    const tbody = document.getElementById("preview-payments-tbody");
+    tbody.innerHTML = "";
+    previews.forEach((row) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.client}</td>
+        <td>$${Number(row.startBalance || 0).toLocaleString()}</td>
+        <td>$${row.amount.toLocaleString()}</td>
+        <td>$${row.projectedEnd.toLocaleString()}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    const warningEl = document.getElementById("payments-unmatched-warning");
+    if (unmatched.length > 0) {
+      warningEl.textContent = `⚠ ${unmatched.length} payment(s) had no match in PaymentsTable: ${unmatched.join(", ")}`;
+      warningEl.style.display = "block";
+    } else {
+      warningEl.style.display = "none";
+    }
+
+    document.getElementById("import-payments-summary").style.display = "none";
+    document.getElementById("preview-payments-section").style.display = "block";
+    document.getElementById("confirm-payments-btn").disabled = previews.length === 0;
 
     setPaymentsStatus(
-      `B2 value: "${fullName}" → initials: "${initials}" | ` +
-      `Bondsman values in file: ${JSON.stringify(bondsmanValues)}`
+      `${previews.length} payment${previews.length !== 1 ? "s" : ""} matched and ready to apply.`
     );
 
   } catch (error) {
