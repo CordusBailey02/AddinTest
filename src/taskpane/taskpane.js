@@ -1,23 +1,25 @@
-/* global console, document, Office */
+/* global console, document, Office, Excel */
 
 // ── CONFIG ────────────────────────────────────────────────────
-// Change this to match your exact top-level folder name in OneDrive
 const START_FOLDER_PATH = "BailBonds";
 
 let accessToken = null;
 let selectedFileId = null;
+let pendingImportRows = [];
 let breadcrumbStack = [{ id: "root", name: "My Files" }];
 
+// ── OFFICE INIT ───────────────────────────────────────────────
 Office.onReady(() => {
   document.getElementById("sign-in-btn").onclick = signIn;
   document.getElementById("sign-out-btn").onclick = signOut;
-  document.getElementById("read-file-btn").onclick = readFile;
+  document.getElementById("preview-btn").onclick = previewImport;
+  document.getElementById("confirm-import-btn").onclick = confirmImport;
+  document.getElementById("cancel-import-btn").onclick = cancelImport;
 });
 
 // ── AUTH ─────────────────────────────────────────────────────
 function signIn() {
   setStatus("Opening sign in window...");
-
   Office.context.ui.displayDialogAsync(
     "https://cordusbailey02.github.io/AddinTest/dialog.html",
     { height: 60, width: 30, promptBeforeOpen: false },
@@ -26,9 +28,7 @@ function signIn() {
         setStatus("Failed to open dialog: " + result.error.message);
         return;
       }
-
       const dialog = result.value;
-
       dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (msg) => {
         dialog.close();
         try {
@@ -37,7 +37,7 @@ function signIn() {
             accessToken = data.accessToken;
             showMainSection(data.userName);
             setStatus("");
-            await navigateToStartFolder(); // ← opens BailBonds directly
+            await navigateToStartFolder();
           } else {
             setStatus("Sign in error: " + data.message);
           }
@@ -45,7 +45,6 @@ function signIn() {
           setStatus("Error parsing auth response.");
         }
       });
-
       dialog.addEventHandler(Office.EventType.DialogEventReceived, (evt) => {
         if (evt.error === 12006) setStatus("Sign in was cancelled.");
       });
@@ -56,48 +55,35 @@ function signIn() {
 function signOut() {
   accessToken = null;
   selectedFileId = null;
+  pendingImportRows = [];
   breadcrumbStack = [{ id: "root", name: "My Files" }];
   document.getElementById("sign-in-section").style.display = "block";
   document.getElementById("main-section").style.display = "none";
+  document.getElementById("preview-section").style.display = "none";
   setStatus("");
 }
 
-// ── START FOLDER NAVIGATION ───────────────────────────────────
+// ── START FOLDER ──────────────────────────────────────────────
 async function navigateToStartFolder() {
   setStatus(`Opening ${START_FOLDER_PATH}...`);
-
   try {
-    // Resolve the named folder path to a Graph item ID
     const response = await fetch(
       `https://graph.microsoft.com/v1.0/me/drive/root:/${START_FOLDER_PATH}`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
+      { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-
     if (!response.ok) {
-      // Folder not found — fall back to OneDrive root gracefully
-      console.warn(`Folder "${START_FOLDER_PATH}" not found, falling back to root.`);
-      setStatus("");
       breadcrumbStack = [{ id: "root", name: "My Files" }];
       await browseFolder("root");
       return;
     }
-
     const folder = await response.json();
-
-    // Build the breadcrumb to reflect we started inside BailBonds
     breadcrumbStack = [
       { id: "root", name: "My Files" },
       { id: folder.id, name: folder.name },
     ];
-
     setStatus("");
     await browseFolder(folder.id);
-
   } catch (error) {
-    console.error("Failed to navigate to start folder:", error);
-    // Fall back to root on any unexpected error
     breadcrumbStack = [{ id: "root", name: "My Files" }];
     await browseFolder("root");
   }
@@ -108,20 +94,20 @@ async function browseFolder(folderId) {
   const browser = document.getElementById("file-browser");
   browser.innerHTML = "<div style='padding:12px;color:gray;'>Loading...</div>";
 
-  // Clear selected file when navigating
   selectedFileId = null;
   document.getElementById("selected-file").style.display = "none";
-  document.getElementById("read-file-btn").style.display = "none";
-  document.getElementById("output-section").style.display = "none";
+  document.getElementById("preview-btn").style.display = "none";
+  document.getElementById("preview-section").style.display = "none";
 
   try {
     const url = folderId === "root"
       ? "https://graph.microsoft.com/v1.0/me/drive/root/children"
       : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children`;
 
-    const response = await fetch(url + "?$orderby=name&$select=id,name,folder,file,size", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    const response = await fetch(
+      url + "?$orderby=name&$select=id,name,folder,file,size",
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
 
     if (!response.ok) {
       const err = await response.json();
@@ -138,12 +124,9 @@ async function browseFolder(folderId) {
     }
 
     browser.innerHTML = "";
-
     items.forEach((item) => {
       const isFolder = !!item.folder;
       const isExcel = item.name?.endsWith(".xlsx") || item.name?.endsWith(".xls");
-
-      // Only show folders and Excel files
       if (!isFolder && !isExcel) return;
 
       const div = document.createElement("div");
@@ -160,22 +143,19 @@ async function browseFolder(folderId) {
           updateBreadcrumb();
           browseFolder(item.id);
         } else {
-          // Select this file
-          document.querySelectorAll(".browser-item").forEach(el => el.classList.remove("selected"));
+          document.querySelectorAll("#file-browser .browser-item").forEach(el => el.classList.remove("selected"));
           div.classList.add("selected");
           selectedFileId = item.id;
           document.getElementById("selected-file-name").textContent = item.name;
           document.getElementById("selected-file").style.display = "block";
-          document.getElementById("read-file-btn").style.display = "inline-block";
+          document.getElementById("preview-btn").style.display = "inline-block";
           setStatus("");
         }
       };
-
       browser.appendChild(div);
     });
 
     updateBreadcrumb();
-
   } catch (error) {
     browser.innerHTML = `<div style='padding:12px;color:red;'>Error: ${error.message}</div>`;
   }
@@ -184,13 +164,10 @@ async function browseFolder(folderId) {
 function updateBreadcrumb() {
   const breadcrumb = document.getElementById("breadcrumb");
   breadcrumb.innerHTML = breadcrumbStack.map((crumb, index) => {
-    if (index === breadcrumbStack.length - 1) {
-      return `📁 ${crumb.name}`;
-    }
+    if (index === breadcrumbStack.length - 1) return `📁 ${crumb.name}`;
     return `<span data-index="${index}">${crumb.name}</span> › `;
   }).join("");
 
-  // Add click handlers for breadcrumb navigation
   breadcrumb.querySelectorAll("span").forEach((span) => {
     span.onclick = () => {
       const index = parseInt(span.getAttribute("data-index"));
@@ -200,36 +177,180 @@ function updateBreadcrumb() {
   });
 }
 
-// ── READ FILE ─────────────────────────────────────────────────
-async function readFile() {
+// ── READ SUBMISSION FILE ──────────────────────────────────────
+async function readSubmissionData(fileId) {
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/workbook/worksheets/Sheet1/usedRange`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error?.message || "Failed to read submission file");
+  }
+
+  const data = await response.json();
+  const rows = data.values;
+
+  // Row 1 = title, Row 2 = dates/agent, Row 3 = headers, Row 4+ = data
+  const dataRows = rows.slice(3);
+
+  const bonds = [];
+  for (const row of dataRows) {
+    const lastName  = row[2];  // Col C
+    const firstName = row[3];  // Col D
+    const ttlBond   = row[4];  // Col E
+    const amtChgd   = row[6];  // Col G
+    const amtCol    = row[7];  // Col H
+    const expense   = row[8];  // Col I
+
+    // Skip empty rows and totals row
+    if (!lastName || !ttlBond) continue;
+    if (String(lastName).toUpperCase().includes("TOTAL")) continue;
+
+    const client = `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`;
+    const startBalance = (Number(amtChgd) || 0) - (Number(amtCol) || 0);
+
+    bonds.push({
+      client,
+      ttlBond:       Number(ttlBond) || 0,
+      amtCharged:    Number(amtChgd) || 0,
+      amtCollected:  Number(amtCol)  || 0,
+      expense:       Number(expense) || 0,
+      startBalance,
+    });
+  }
+
+  return bonds;
+}
+
+// ── PREVIEW IMPORT ────────────────────────────────────────────
+async function previewImport() {
   if (!selectedFileId) {
-    setStatus("Please select a file first.");
+    setStatus("Please select a submission file first.");
     return;
   }
 
-  setStatus("Reading file...");
-  document.getElementById("output-section").style.display = "none";
+  setStatus("Reading submission...");
+  document.getElementById("preview-section").style.display = "none";
 
   try {
-    const response = await fetch(
-      `https://graph.microsoft.com/v1.0/me/drive/items/${selectedFileId}/workbook/worksheets/Sheet1/usedRange`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
+    const bonds = await readSubmissionData(selectedFileId);
 
-    if (!response.ok) {
-      const err = await response.json();
-      setStatus(`Error: ${err.error?.message || response.statusText}`);
+    if (bonds.length === 0) {
+      setStatus("No bond entries found in the submission file.");
       return;
     }
 
-    const data = await response.json();
-    displayTable(data.values);
-    setStatus("Data loaded successfully.");
+    pendingImportRows = bonds;
+
+    // Build preview table
+    const tbody = document.getElementById("preview-tbody");
+    tbody.innerHTML = "";
+    bonds.forEach((bond) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${bond.client}</td>
+        <td>$${bond.ttlBond.toLocaleString()}</td>
+        <td>$${bond.amtCharged.toLocaleString()}</td>
+        <td>$${bond.amtCollected.toLocaleString()}</td>
+        <td>$${bond.expense.toLocaleString()}</td>
+        <td>$${bond.startBalance.toLocaleString()}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    document.getElementById("import-summary").style.display = "none";
+    document.getElementById("preview-section").style.display = "block";
+    document.getElementById("confirm-import-btn").disabled = false;
+    setStatus(`${bonds.length} bond${bonds.length > 1 ? "s" : ""} ready to import.`);
+
   } catch (error) {
-    setStatus("Failed to read file: " + error.message);
+    setStatus("Error reading submission: " + error.message);
     console.error(error);
+  }
+}
+
+function cancelImport() {
+  pendingImportRows = [];
+  document.getElementById("preview-section").style.display = "none";
+  setStatus("Import cancelled.");
+}
+
+// ── CONFIRM IMPORT — writes to currently open workbook ────────
+async function confirmImport() {
+  if (!pendingImportRows.length) return;
+
+  document.getElementById("confirm-import-btn").disabled = true;
+  setStatus("Importing...");
+
+  try {
+    await Excel.run(async (context) => {
+      const sheet = context.workbook.worksheets.getItem("PAYMENTS");
+      const usedRange = sheet.getUsedRange();
+      usedRange.load("rowCount");
+      await context.sync();
+
+      // Used range includes header rows 1-4 and the totals row
+      // Data rows start at row 5 (index 4). Totals is always the last used row.
+      // New data goes before the totals row.
+      const totalsRowIndex = usedRange.rowCount - 1; // 0-based index of TOTALS row
+      let nextRowIndex = totalsRowIndex; // insert before TOTALS
+
+      for (const bond of pendingImportRows) {
+        // Insert a blank row before the TOTALS row so formulas in TOTALS expand
+        const totalsRange = sheet.getRangeByIndexes(nextRowIndex, 0, 1, 13);
+        totalsRange.insert(Excel.InsertShiftDirection.down);
+        await context.sync();
+
+        // Now write values to the newly inserted row
+        const newRow = sheet.getRangeByIndexes(nextRowIndex, 0, 1, 13);
+        newRow.values = [[
+          bond.client,       // A - CLIENT
+          bond.ttlBond,      // B - TTL BOND
+          bond.amtCharged,   // C - AMT CHARGED
+          bond.amtCollected, // D - AMT COLLECTED
+          bond.expense,      // E - EXPENSE
+          "",                // F - % PAID ON BOND (owner fills manually)
+          bond.startBalance, // G - START BALANCE
+          "",                // H - AMT OF PAYMENT (secretary later)
+          "",                // I - END BALANCE (formula below)
+          "",                // J - BALANCE OWED
+          "",                // K - ENDING BALANCE (formula below)
+          "",                // L - PAYMENT (formula below)
+          "",                // M - REACH
+        ]];
+
+        // Write formulas — use Excel row number (1-based = index + 1)
+        const excelRow = nextRowIndex + 1;
+        const endBalCell    = sheet.getRangeByIndexes(nextRowIndex, 8, 1, 1);  // Col I
+        const endingBalCell = sheet.getRangeByIndexes(nextRowIndex, 10, 1, 1); // Col K
+        const paymentCell   = sheet.getRangeByIndexes(nextRowIndex, 11, 1, 1); // Col L
+
+        endBalCell.formulas    = [[`=PAYMENTS!$G${excelRow}-PAYMENTS!$H${excelRow}`]];
+        endingBalCell.formulas = [[`=PAYMENTS!$J${excelRow}-PAYMENTS!$L${excelRow}`]];
+        paymentCell.formulas   = [[`=PAYMENTS!$H${excelRow}*PAYMENTS!$F${excelRow}`]];
+
+        await context.sync();
+        nextRowIndex++;
+      }
+    });
+
+    const summary = document.getElementById("import-summary");
+    summary.className = "import-summary";
+    summary.textContent = `✔ Successfully imported ${pendingImportRows.length} bond${pendingImportRows.length > 1 ? "s" : ""} into PAYMENTS.`;
+    summary.style.display = "block";
+    pendingImportRows = [];
+    setStatus("");
+
+  } catch (error) {
+    const summary = document.getElementById("import-summary");
+    summary.className = "import-summary error";
+    summary.textContent = `✖ Import failed: ${error.message}`;
+    summary.style.display = "block";
+    document.getElementById("confirm-import-btn").disabled = false;
+    console.error(error);
+    setStatus("");
   }
 }
 
@@ -242,27 +363,4 @@ function showMainSection(userName) {
 
 function setStatus(message) {
   document.getElementById("status").textContent = message;
-}
-
-function displayTable(values) {
-  if (!values || values.length === 0) {
-    document.getElementById("output").innerHTML = "<p>No data found.</p>";
-    document.getElementById("output-section").style.display = "block";
-    return;
-  }
-
-  const table = document.createElement("table");
-  values.forEach((row, rowIndex) => {
-    const tr = document.createElement("tr");
-    row.forEach((cell) => {
-      const td = document.createElement(rowIndex === 0 ? "th" : "td");
-      td.textContent = cell;
-      tr.appendChild(td);
-    });
-    table.appendChild(tr);
-  });
-
-  document.getElementById("output").innerHTML = "";
-  document.getElementById("output").appendChild(table);
-  document.getElementById("output-section").style.display = "block";
 }

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Excel Add-in</title>
+    <title>Bail Bonds Payroll</title>
     <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
     <link rel="stylesheet" href="https://res-1.cdn.office.net/files/fabric-cdn-prod_20230815.002/office-ui-fabric-core/11.1.0/css/fabric.min.css"/>
     <link href="taskpane.css" rel="stylesheet" type="text/css" />
@@ -24,63 +24,87 @@
             border: 1px solid #0078d4; margin-left: 6px;
         }
         button.secondary:hover { background: #f0f6ff; }
+        button.success { background: #107c10; }
+        button.success:hover { background: #0a5e0a; }
+        button:disabled { background: #aaa; cursor: not-allowed; }
         #status { color: gray; font-size: 12px; margin: 8px 0; min-height: 16px; }
         #breadcrumb { font-size: 12px; color: #555; margin-bottom: 6px; }
         #breadcrumb span { cursor: pointer; color: #0078d4; }
         #breadcrumb span:hover { text-decoration: underline; }
-        #file-browser { border: 1px solid #ddd; border-radius: 3px; max-height: 280px; overflow-y: auto; }
-        .browser-item {
-            display: flex; align-items: center; padding: 7px 10px;
-            cursor: pointer; border-bottom: 1px solid #f0f0f0;
-        }
+        #file-browser { border: 1px solid #ddd; border-radius: 3px; max-height: 220px; overflow-y: auto; }
+        .browser-item { display: flex; align-items: center; padding: 7px 10px; cursor: pointer; border-bottom: 1px solid #f0f0f0; }
         .browser-item:hover { background: #f0f6ff; }
-        .browser-item .icon { margin-right: 8px; font-size: 16px; }
+        .browser-item .icon { margin-right: 8px; }
         .browser-item .name { flex: 1; }
         .browser-item.selected { background: #deeeff; }
-        #selected-file { font-size: 12px; color: #333; margin: 8px 0; padding: 6px; background: #f8f8f8; border-radius: 3px; display: none; }
-        table { border-collapse: collapse; width: 100%; font-size: 12px; }
-        th, td { border: 1px solid #ccc; padding: 4px 8px; }
-        th { background: #f3f3f3; }
-        #output-section { margin-top: 12px; }
+        #selected-file { font-size: 12px; color: #333; margin: 6px 0; padding: 6px; background: #f8f8f8; border-radius: 3px; display: none; }
         .user-bar { font-size: 12px; color: #555; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        #preview-section { display: none; margin-top: 10px; }
+        #preview-section h3 { font-size: 13px; margin: 0 0 6px 0; }
+        .preview-table { width: 100%; font-size: 11px; border-collapse: collapse; display: block; overflow-x: auto; }
+        .preview-table th { background: #0078d4; color: white; padding: 4px 6px; text-align: left; white-space: nowrap; }
+        .preview-table td { border: 1px solid #ddd; padding: 3px 6px; white-space: nowrap; }
+        .preview-table tr:nth-child(even) td { background: #f8f8f8; }
+        .import-summary { border-radius: 3px; padding: 8px 10px; font-size: 12px; margin: 8px 0; display: none; background: #f0f9f0; border: 1px solid #b3d9b3; }
+        .import-summary.error { background: #fff0f0; border-color: #ffb3b3; }
+        hr { border: none; border-top: 1px solid #eee; margin: 12px 0; }
+        .step-label { font-weight: 600; font-size: 12px; margin: 10px 0 4px 0; }
     </style>
 </head>
 <body>
     <header>
-        <h1>Excel Add-in</h1>
+        <h1>Bail Bonds Payroll</h1>
     </header>
-
     <main>
-        <!-- Sign in -->
+
         <div id="sign-in-section">
             <p>Sign in with your Microsoft 365 account to get started.</p>
             <button id="sign-in-btn">Sign In</button>
         </div>
 
-        <!-- Signed in -->
         <div id="main-section" style="display:none;">
             <div class="user-bar">
                 <span>Signed in as <b id="user-name"></b></span>
                 <button class="secondary" id="sign-out-btn">Sign Out</button>
             </div>
 
-            <p style="margin: 0 0 6px 0; font-weight: 600;">Select a file from OneDrive:</p>
+            <p class="step-label">Select the employee's submission file:</p>
+            <div id="breadcrumb"></div>
+            <div id="file-browser"></div>
 
-            <div id="breadcrumb">📁 <span data-id="root">My Files</span></div>
-            <div id="file-browser">
-                <div style="padding: 12px; color: gray;">Loading...</div>
-            </div>
-
-            <div id="selected-file">📄 <span id="selected-file-name"></span></div>
-
+            <div id="selected-file">📗 <span id="selected-file-name"></span></div>
             <div id="status"></div>
 
-            <button id="read-file-btn" style="display:none;">Read Selected File</button>
+            <button id="preview-btn" style="display:none;">Preview Import</button>
 
-            <div id="output-section" style="display:none;">
-                <p style="font-weight: 600; margin: 12px 0 6px 0;">Data from Sheet1:</p>
-                <div style="overflow-x: auto;"><div id="output"></div></div>
+            <div id="preview-section">
+                <hr/>
+                <h3>📋 Import Preview</h3>
+                <p style="font-size:11px;color:#555;margin:0 0 8px 0;">
+                    These rows will be added to the <b>PAYMENTS</b> sheet of the open workbook.
+                </p>
+                <div style="overflow-x:auto;">
+                    <table class="preview-table">
+                        <thead>
+                            <tr>
+                                <th>CLIENT</th>
+                                <th>TTL BOND</th>
+                                <th>AMT CHARGED</th>
+                                <th>AMT COLLECTED</th>
+                                <th>EXPENSE</th>
+                                <th>START BALANCE</th>
+                            </tr>
+                        </thead>
+                        <tbody id="preview-tbody"></tbody>
+                    </table>
+                </div>
+                <div id="import-summary" class="import-summary"></div>
+                <div style="margin-top:8px;">
+                    <button class="success" id="confirm-import-btn">✔ Confirm Import</button>
+                    <button class="secondary" id="cancel-import-btn">Cancel</button>
+                </div>
             </div>
+
         </div>
     </main>
 </body>
