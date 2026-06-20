@@ -416,97 +416,24 @@ async function previewPaymentsImport() {
   }
 
   setPaymentsStatus("Reading daily ledger...");
-  document.getElementById("preview-payments-section").style.display = "none";
 
   try {
-    // Step 1: Get initials from open workbook
-    const { initials, fullName } = await getEmployeeInitials();
-    document.getElementById("detected-employee").textContent = `${fullName} (${initials})`;
-
-    // Step 2: Read secretary file and filter by initials
-    const matched = await readSecretaryPayments(selectedPaymentsFileId, initials);
-
-    if (matched.length === 0) {
-      setPaymentsStatus(`No payments found for bondsman "${initials}" in this file.`);
-      return;
-    }
-
-    // Step 3: Cross-reference with PaymentsTable in open workbook
-    const tableRows = await Excel.run(async (context) => {
-      const table = context.workbook.tables.getItem("PaymentsTable");
-      const bodyRange = table.getDataBodyRange();
-      bodyRange.load("values");
-      await context.sync();
-      return bodyRange.values;
-    });
-
-    // Match secretary clients to PaymentsTable clients (col A = index 0)
-    const paymentsTableClients = tableRows.map((row, idx) => ({
-      rowIndex: idx,
-      client: String(row[0] || "").toUpperCase().trim(),
-      currentStartBalance: row[6], // col G - START BALANCE
-      currentEndBalance:   row[8], // col I - END BALANCE
-    }));
-
-    const previews = [];
-    const unmatched = [];
-
-    for (const payment of matched) {
-      const tableMatch = paymentsTableClients.find(
-        r => r.client === payment.client && r.client !== ""
-      );
-
-      if (tableMatch) {
-        previews.push({
-          client:       payment.client,
-          amount:       payment.amount,
-          rowIndex:     tableMatch.rowIndex,
-          startBalance: tableMatch.currentStartBalance,
-          // END BALANCE will be START BALANCE - AMOUNT after write
-          projectedEnd: (Number(tableMatch.currentStartBalance) || 0) - payment.amount,
-        });
-      } else {
-        unmatched.push(payment.client);
-      }
-    }
-
-    pendingPaymentRows = previews;
-
-    // Build preview table
-    const tbody = document.getElementById("preview-payments-tbody");
-    tbody.innerHTML = "";
-
-    previews.forEach((row) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${row.client}</td>
-        <td>$${row.startBalance?.toLocaleString() ?? "—"}</td>
-        <td>$${row.amount.toLocaleString()}</td>
-        <td>$${row.projectedEnd.toLocaleString()}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-
-    // Show unmatched warning if any
-    const warningEl = document.getElementById("payments-unmatched-warning");
-    if (unmatched.length > 0) {
-      warningEl.textContent = `⚠ ${unmatched.length} payment(s) had no match in PaymentsTable: ${unmatched.join(", ")}`;
-      warningEl.style.display = "block";
-    } else {
-      warningEl.style.display = "none";
-    }
-
-    document.getElementById("import-payments-summary").style.display = "none";
-    document.getElementById("preview-payments-section").style.display = "block";
-    document.getElementById("confirm-payments-btn").disabled = previews.length === 0;
-
-    setPaymentsStatus(
-      `${previews.length} payment${previews.length !== 1 ? "s" : ""} matched and ready to apply.`
+    const response = await fetch(
+      `https://graph.microsoft.com/v1.0/me/drive/items/${selectedPaymentsFileId}/workbook/worksheets/Sheet1/usedRange`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
     );
+    const data = await response.json();
+    const rows = data.values;
+
+    // Log every row so we can see exactly what Graph is returning
+    rows.forEach((row, i) => {
+      console.log(`Row ${i}: ${JSON.stringify(row)}`);
+    });
+
+    setPaymentsStatus(`Rows found: ${rows.length}. Check console for details.`);
 
   } catch (error) {
     setPaymentsStatus("Error: " + error.message);
-    console.error(error);
   }
 }
 
