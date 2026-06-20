@@ -286,26 +286,17 @@ async function confirmImport() {
 
   try {
     await Excel.run(async (context) => {
-      const sheet = context.workbook.worksheets.getItem("PAYMENTS");
-      const usedRange = sheet.getUsedRange();
-      usedRange.load("rowCount");
+      // Get the PaymentsTable in the PAYMENTS sheet
+      const table = context.workbook.tables.getItem("PaymentsTable");
+      table.load("name");
       await context.sync();
 
-      // Used range includes header rows 1-4 and the totals row
-      // Data rows start at row 5 (index 4). Totals is always the last used row.
-      // New data goes before the totals row.
-      const totalsRowIndex = usedRange.rowCount - 1; // 0-based index of TOTALS row
-      let nextRowIndex = totalsRowIndex; // insert before TOTALS
-
       for (const bond of pendingImportRows) {
-        // Insert a blank row before the TOTALS row so formulas in TOTALS expand
-        const totalsRange = sheet.getRangeByIndexes(nextRowIndex, 0, 1, 13);
-        totalsRange.insert(Excel.InsertShiftDirection.down);
-        await context.sync();
-
-        // Now write values to the newly inserted row
-        const newRow = sheet.getRangeByIndexes(nextRowIndex, 0, 1, 13);
-        newRow.values = [[
+        // Add a new row to the table body
+        // Excel Tables automatically keep the Total Row at the bottom
+        // Structured reference formulas copy down automatically
+        // Pass null for formula columns — the table copies them from existing rows
+        table.rows.add(null, [[
           bond.client,       // A - CLIENT
           bond.ttlBond,      // B - TTL BOND
           bond.amtCharged,   // C - AMT CHARGED
@@ -314,33 +305,23 @@ async function confirmImport() {
           "",                // F - % PAID ON BOND (owner fills manually)
           bond.startBalance, // G - START BALANCE
           "",                // H - AMT OF PAYMENT (secretary later)
-          "",                // I - END BALANCE (formula below)
+          "",                // I - END BALANCE (structured formula copies automatically)
           "",                // J - BALANCE OWED
-          "",                // K - ENDING BALANCE (formula below)
-          "",                // L - PAYMENT (formula below)
+          "",                // K - ENDING BALANCE (structured formula copies automatically)
+          "",                // L - PAYMENT (structured formula copies automatically)
           "",                // M - REACH
-        ]];
-
-        // Write formulas — use Excel row number (1-based = index + 1)
-        const excelRow = nextRowIndex + 1;
-        const endBalCell    = sheet.getRangeByIndexes(nextRowIndex, 8, 1, 1);  // Col I
-        const endingBalCell = sheet.getRangeByIndexes(nextRowIndex, 10, 1, 1); // Col K
-        const paymentCell   = sheet.getRangeByIndexes(nextRowIndex, 11, 1, 1); // Col L
-
-        endBalCell.formulas    = [[`=PAYMENTS!$G${excelRow}-PAYMENTS!$H${excelRow}`]];
-        endingBalCell.formulas = [[`=PAYMENTS!$J${excelRow}-PAYMENTS!$L${excelRow}`]];
-        paymentCell.formulas   = [[`=PAYMENTS!$H${excelRow}*PAYMENTS!$F${excelRow}`]];
-
-        await context.sync();
-        nextRowIndex++;
+        ]]);
       }
+
+      await context.sync();
     });
 
     const summary = document.getElementById("import-summary");
     summary.className = "import-summary";
-    summary.textContent = `✔ Successfully imported ${pendingImportRows.length} bond${pendingImportRows.length > 1 ? "s" : ""} into PAYMENTS.`;
+    summary.textContent = `✔ Successfully imported ${pendingImportRows.length} bond${pendingImportRows.length > 1 ? "s" : ""} into PaymentsTable.`;
     summary.style.display = "block";
     pendingImportRows = [];
+    document.getElementById("confirm-import-btn").disabled = false;
     setStatus("");
 
   } catch (error) {
