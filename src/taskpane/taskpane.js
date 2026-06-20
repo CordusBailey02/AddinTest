@@ -291,66 +291,62 @@ async function confirmImport() {
       bodyRange.load("values, rowCount, columnCount");
       await context.sync();
 
-      // ── STEP 1: Compact — collect all non-empty rows ──────────
-      const existingRows = bodyRange.values;
-      const compacted = existingRows.filter(row => {
-        // A row is considered empty if the CLIENT column (index 0) is blank
+      const colCount = bodyRange.columnCount;
+      const currentRowCount = bodyRange.rowCount;
+
+      // ── STEP 1: Compact existing rows ─────────────────────────
+      const compacted = bodyRange.values.filter(row => {
         const clientVal = row[0];
         return clientVal !== null && clientVal !== "" && clientVal !== undefined;
       });
 
-      // ── STEP 2: Build the new rows to add ─────────────────────
+      // ── STEP 2: Build new rows ─────────────────────────────────
       const newRows = pendingImportRows.map(bond => {
-        const row = new Array(bodyRange.columnCount).fill("");
-        row[0]  = bond.client;        // A - CLIENT
-        row[1]  = bond.ttlBond;       // B - TTL BOND
-        row[2]  = bond.amtCharged;    // C - AMT CHARGED
-        row[3]  = bond.amtCollected;  // D - AMT COLLECTED
-        row[4]  = bond.expense;       // E - EXPENSE
-        row[5]  = "";                 // F - % PAID ON BOND (manual)
-        row[6]  = bond.startBalance;  // G - START BALANCE
-        row[7]  = "";                 // H - AMT OF PAYMENT (secretary later)
-        row[8]  = "";                 // I - END BALANCE (formula)
-        row[9]  = "";                 // J - BALANCE OWED
-        row[10] = "";                 // K - ENDING BALANCE (formula)
-        row[11] = "";                 // L - PAYMENT (formula)
-        row[12] = "";                 // M - REACH
+        const row = new Array(colCount).fill("");
+        row[0]  = bond.client;
+        row[1]  = bond.ttlBond;
+        row[2]  = bond.amtCharged;
+        row[3]  = bond.amtCollected;
+        row[4]  = bond.expense;
+        row[5]  = "";
+        row[6]  = bond.startBalance;
+        row[7]  = "";
+        row[8]  = "";
+        row[9]  = "";
+        row[10] = "";
+        row[11] = "";
+        row[12] = "";
         return row;
       });
 
-      // ── STEP 3: Write compacted + new rows back to the table ──
       const allRows = [...compacted, ...newRows];
-
-      // If the table needs to grow, add blank rows first
-      const currentRowCount = bodyRange.rowCount;
       const neededRowCount = allRows.length;
 
+      // ── STEP 3: Grow table if needed ───────────────────────────
       if (neededRowCount > currentRowCount) {
         const rowsToAdd = neededRowCount - currentRowCount;
         for (let i = 0; i < rowsToAdd; i++) {
-          table.rows.add(null, [new Array(bodyRange.columnCount).fill("")]);
+          table.rows.add(null, [new Array(colCount).fill("")]);
         }
         await context.sync();
       }
 
-      // Re-load body range after potential row additions
-      const updatedBodyRange = table.getDataBodyRange();
-      updatedBodyRange.load("values, rowCount");
+      // ── STEP 4: Write all rows back ────────────────────────────
+      // Get fresh body range after any additions
+      const freshBody = table.getDataBodyRange();
+      freshBody.load("rowCount");
       await context.sync();
 
-      // Write all rows back (compacted existing + new)
-      const writeRange = updatedBodyRange.getResizedRange(0, 0);
-      
-      // Write only the rows we have data for
-      const finalRange = table.getDataBodyRange().getCell(0, 0)
-        .getResizedRange(allRows.length - 1, bodyRange.columnCount - 1);
-      finalRange.values = allRows;
+      // Write only the rows with data
+      const writeRange = freshBody.getCell(0, 0)
+        .getResizedRange(allRows.length - 1, colCount - 1);
+      writeRange.values = allRows;
 
-      // Clear any remaining rows below our data if table shrank
-      if (currentRowCount > neededRowCount) {
-        const clearRange = table.getDataBodyRange()
-          .getCell(allRows.length, 0)
-          .getResizedRange(currentRowCount - neededRowCount - 1, bodyRange.columnCount - 1);
+      // ── STEP 5: Clear leftover rows if table compacted ─────────
+      if (freshBody.rowCount > neededRowCount) {
+        const leftoverCount = freshBody.rowCount - neededRowCount;
+        const clearRange = freshBody.getCell(neededRowCount, 0)
+          .getResizedRange(leftoverCount - 1, colCount - 1);
         clearRange.clear(Excel.ClearType.contents);
       }
 
