@@ -1,31 +1,62 @@
 /* global console, document, Office, Excel */
 
 // ── CONFIG ────────────────────────────────────────────────────
-const START_FOLDER_PATH = "BailBonds/EmployeeSubmissions";
+const START_FOLDER_PATH          = "BailBonds/EmployeeSubmissions";
 const START_FOLDER_PATH_PAYMENTS = "BailBonds/Payments";
 
-let accessToken = null;
-let selectedFileId = null;
+// Column indices for secretary daily ledger (Sheet1)
+const LEDGER_CLIENT_COL   = 0;
+const LEDGER_AMOUNT_COL   = 1;
+const LEDGER_BONDSMAN_COL = 5;
+
+// Column indices for PaymentsTable in owner workbook
+const PT_CLIENT       = 0;
+const PT_TTL_BOND     = 1;
+const PT_AMT_CHARGED  = 2;
+const PT_AMT_COLLECT  = 3;
+const PT_EXPENSE      = 4;
+const PT_PCT_PAID     = 5;
+const PT_START_BAL    = 6;
+const PT_AMT_PAYMENT  = 7;
+const PT_END_BAL      = 8;
+const PT_BAL_OWED     = 9;
+const PT_ENDING_BAL   = 10;
+const PT_PAYMENT      = 11;
+const PT_REACH        = 12;
+
+// ── STATE ─────────────────────────────────────────────────────
+let accessToken        = null;
+let selectedFileId     = null;
 let selectedPaymentsFileId = null;
-let pendingImportRows = [];
+let pendingImportRows  = [];
 let pendingPaymentRows = [];
-let breadcrumbStack = [{ id: "root", name: "My Files" }];
-let breadcrumbStackPayments = [{ id: "root", name: "My Files" }];
+
+// Each browser gets its own breadcrumb stack
+const browsers = {
+  submission: {
+    stackId:    "breadcrumb",
+    browserId:  "file-browser",
+    stack:      [{ id: "root", name: "My Files" }],
+    onSelect:   onSubmissionFileSelected,
+  },
+  payments: {
+    stackId:    "payments-breadcrumb",
+    browserId:  "payments-file-browser",
+    stack:      [{ id: "root", name: "My Files" }],
+    onSelect:   onPaymentsFileSelected,
+  },
+};
 
 // ── OFFICE INIT ───────────────────────────────────────────────
 Office.onReady(() => {
-  document.getElementById("sign-in-btn").onclick = signIn;
-  document.getElementById("sign-out-btn").onclick = signOut;
-
-  // Bond import
-  document.getElementById("preview-btn").onclick = previewImport;
+  document.getElementById("sign-in-btn").onclick        = signIn;
+  document.getElementById("sign-out-btn").onclick       = signOut;
+  document.getElementById("preview-btn").onclick        = previewImport;
   document.getElementById("confirm-import-btn").onclick = confirmImport;
-  document.getElementById("cancel-import-btn").onclick = cancelImport;
-
-  // Payment import
-  document.getElementById("preview-payments-btn").onclick = previewPaymentsImport;
-  document.getElementById("confirm-payments-btn").onclick = confirmPaymentsImport;
-  document.getElementById("cancel-payments-btn").onclick = cancelPaymentsImport;
+  document.getElementById("cancel-import-btn").onclick  = cancelImport;
+  document.getElementById("preview-payments-btn").onclick   = previewPaymentsImport;
+  document.getElementById("confirm-payments-btn").onclick   = confirmPaymentsImport;
+  document.getElementById("cancel-payments-btn").onclick    = cancelPaymentsImport;
 });
 
 // ── AUTH ─────────────────────────────────────────────────────
@@ -48,8 +79,8 @@ function signIn() {
             accessToken = data.accessToken;
             showMainSection(data.userName);
             setStatus("");
-            await navigateToStartFolder();
-            await navigateToStartFolderPayments();
+            await navigateBrowserToFolder("submission", START_FOLDER_PATH);
+            await navigateBrowserToFolder("payments",  START_FOLDER_PATH_PAYMENTS);
           } else {
             setStatus("Sign in error: " + data.message);
           }
@@ -65,80 +96,75 @@ function signIn() {
 }
 
 function signOut() {
-  accessToken = null;
-  selectedFileId = null;
+  accessToken            = null;
+  selectedFileId         = null;
   selectedPaymentsFileId = null;
-  pendingImportRows = [];
-  pendingPaymentRows = [];
-  breadcrumbStack = [{ id: "root", name: "My Files" }];
-  breadcrumbStackPayments = [{ id: "root", name: "My Files" }];
-  document.getElementById("sign-in-section").style.display = "block";
-  document.getElementById("main-section").style.display = "none";
-  document.getElementById("preview-section").style.display = "none";
+  pendingImportRows      = [];
+  pendingPaymentRows     = [];
+
+  // Reset both browser stacks
+  browsers.submission.stack = [{ id: "root", name: "My Files" }];
+  browsers.payments.stack   = [{ id: "root", name: "My Files" }];
+
+  document.getElementById("sign-in-section").style.display  = "block";
+  document.getElementById("main-section").style.display     = "none";
+  document.getElementById("preview-section").style.display  = "none";
   document.getElementById("preview-payments-section").style.display = "none";
   setStatus("");
   setPaymentsStatus("");
 }
 
-// ── START FOLDERS ─────────────────────────────────────────────
-async function navigateToStartFolder() {
-  setStatus(`Opening submissions folder...`);
+// ── GENERIC FILE BROWSER ──────────────────────────────────────
+
+/**
+ * Navigate a browser to a named OneDrive path on startup.
+ * Falls back to root if the folder doesn't exist.
+ * @param {"submission"|"payments"} browserKey
+ * @param {string} folderPath  e.g. "BailBonds/EmployeeSubmissions"
+ */
+async function navigateBrowserToFolder(browserKey, folderPath) {
+  const b = browsers[browserKey];
   try {
     const response = await fetch(
-      `https://graph.microsoft.com/v1.0/me/drive/root:/${START_FOLDER_PATH}`,
+      `https://graph.microsoft.com/v1.0/me/drive/root:/${folderPath}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-    if (!response.ok) {
-      breadcrumbStack = [{ id: "root", name: "My Files" }];
-      await browseFolder("root");
-      return;
-    }
+    if (!response.ok) throw new Error("Folder not found");
     const folder = await response.json();
-    breadcrumbStack = [
-      { id: "root", name: "My Files" },
-      { id: folder.id, name: folder.name },
+    b.stack = [
+      { id: "root",      name: "My Files"  },
+      { id: folder.id,   name: folder.name },
     ];
-    setStatus("");
-    await browseFolder(folder.id);
-  } catch (error) {
-    breadcrumbStack = [{ id: "root", name: "My Files" }];
-    await browseFolder("root");
+    await browseFolder(browserKey, folder.id);
+  } catch {
+    b.stack = [{ id: "root", name: "My Files" }];
+    await browseFolder(browserKey, "root");
   }
 }
 
-async function navigateToStartFolderPayments() {
-  setPaymentsStatus(`Opening payments folder...`);
-  try {
-    const response = await fetch(
-      `https://graph.microsoft.com/v1.0/me/drive/root:/${START_FOLDER_PATH_PAYMENTS}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    if (!response.ok) {
-      breadcrumbStackPayments = [{ id: "root", name: "My Files" }];
-      await browsePaymentsFolder("root");
-      return;
-    }
-    const folder = await response.json();
-    breadcrumbStackPayments = [
-      { id: "root", name: "My Files" },
-      { id: folder.id, name: folder.name },
-    ];
-    setPaymentsStatus("");
-    await browsePaymentsFolder(folder.id);
-  } catch (error) {
-    breadcrumbStackPayments = [{ id: "root", name: "My Files" }];
-    await browsePaymentsFolder("root");
-  }
-}
+/**
+ * Fetch and render folder contents into a browser panel.
+ * @param {"submission"|"payments"} browserKey
+ * @param {string} folderId  Graph item ID or "root"
+ */
+async function browseFolder(browserKey, folderId) {
+  const b       = browsers[browserKey];
+  const browser = document.getElementById(b.browserId);
 
-// ── FILE BROWSERS ─────────────────────────────────────────────
-async function browseFolder(folderId) {
-  const browser = document.getElementById("file-browser");
   browser.innerHTML = "<div style='padding:12px;color:gray;'>Loading...</div>";
-  selectedFileId = null;
-  document.getElementById("selected-file").style.display = "none";
-  document.getElementById("preview-btn").style.display = "none";
-  document.getElementById("preview-section").style.display = "none";
+
+  // Reset selection state for this browser
+  if (browserKey === "submission") {
+    selectedFileId = null;
+    document.getElementById("selected-file").style.display    = "none";
+    document.getElementById("preview-btn").style.display      = "none";
+    document.getElementById("preview-section").style.display  = "none";
+  } else {
+    selectedPaymentsFileId = null;
+    document.getElementById("selected-payments-file").style.display         = "none";
+    document.getElementById("preview-payments-btn").style.display           = "none";
+    document.getElementById("preview-payments-section").style.display       = "none";
+  }
 
   try {
     const url = folderId === "root"
@@ -149,22 +175,27 @@ async function browseFolder(folderId) {
       url + "?$orderby=name&$select=id,name,folder,file,size",
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
+
     if (!response.ok) {
       const err = await response.json();
       browser.innerHTML = `<div style='padding:12px;color:red;'>${err.error?.message || "Error loading files"}</div>`;
       return;
     }
-    const data = await response.json();
-    const items = data.value;
-    if (items.length === 0) {
+
+    const { value: items } = await response.json();
+
+    if (!items.length) {
       browser.innerHTML = "<div style='padding:12px;color:gray;'>This folder is empty.</div>";
       return;
     }
+
     browser.innerHTML = "";
+
     items.forEach((item) => {
       const isFolder = !!item.folder;
-      const isExcel = item.name?.endsWith(".xlsx") || item.name?.endsWith(".xls");
+      const isExcel  = item.name?.endsWith(".xlsx") || item.name?.endsWith(".xls");
       if (!isFolder && !isExcel) return;
+
       const div = document.createElement("div");
       div.className = "browser-item";
       div.innerHTML = `
@@ -172,390 +203,162 @@ async function browseFolder(folderId) {
         <span class="name">${item.name}</span>
         ${isFolder ? '<span style="color:#aaa;font-size:11px;">▶</span>' : ""}
       `;
+
       div.onclick = () => {
         if (isFolder) {
-          breadcrumbStack.push({ id: item.id, name: item.name });
-          updateBreadcrumb();
-          browseFolder(item.id);
+          b.stack.push({ id: item.id, name: item.name });
+          renderBreadcrumb(browserKey);
+          browseFolder(browserKey, item.id);
         } else {
-          document.querySelectorAll("#file-browser .browser-item").forEach(el => el.classList.remove("selected"));
+          // Deselect others in this browser
+          browser.querySelectorAll(".browser-item").forEach(el => el.classList.remove("selected"));
           div.classList.add("selected");
-          selectedFileId = item.id;
-          document.getElementById("selected-file-name").textContent = item.name;
-          document.getElementById("selected-file").style.display = "block";
-          document.getElementById("preview-btn").style.display = "inline-block";
-          setStatus("");
+          b.onSelect(item);
         }
       };
+
       browser.appendChild(div);
     });
-    updateBreadcrumb();
+
+    renderBreadcrumb(browserKey);
+
   } catch (error) {
     browser.innerHTML = `<div style='padding:12px;color:red;'>Error: ${error.message}</div>`;
   }
 }
 
-async function browsePaymentsFolder(folderId) {
-  const browser = document.getElementById("payments-file-browser");
-  browser.innerHTML = "<div style='padding:12px;color:gray;'>Loading...</div>";
-  selectedPaymentsFileId = null;
-  document.getElementById("selected-payments-file").style.display = "none";
-  document.getElementById("preview-payments-btn").style.display = "none";
-  document.getElementById("preview-payments-section").style.display = "none";
+/**
+ * Render breadcrumb trail for a browser panel.
+ * @param {"submission"|"payments"} browserKey
+ */
+function renderBreadcrumb(browserKey) {
+  const b   = browsers[browserKey];
+  const el  = document.getElementById(b.stackId);
 
-  try {
-    const url = folderId === "root"
-      ? "https://graph.microsoft.com/v1.0/me/drive/root/children"
-      : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children`;
-
-    const response = await fetch(
-      url + "?$orderby=name&$select=id,name,folder,file,size",
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    if (!response.ok) {
-      const err = await response.json();
-      browser.innerHTML = `<div style='padding:12px;color:red;'>${err.error?.message || "Error loading files"}</div>`;
-      return;
-    }
-    const data = await response.json();
-    const items = data.value;
-    if (items.length === 0) {
-      browser.innerHTML = "<div style='padding:12px;color:gray;'>This folder is empty.</div>";
-      return;
-    }
-    browser.innerHTML = "";
-    items.forEach((item) => {
-      const isFolder = !!item.folder;
-      const isExcel = item.name?.endsWith(".xlsx") || item.name?.endsWith(".xls");
-      if (!isFolder && !isExcel) return;
-      const div = document.createElement("div");
-      div.className = "browser-item";
-      div.innerHTML = `
-        <span class="icon">${isFolder ? "📁" : "📗"}</span>
-        <span class="name">${item.name}</span>
-        ${isFolder ? '<span style="color:#aaa;font-size:11px;">▶</span>' : ""}
-      `;
-      div.onclick = () => {
-        if (isFolder) {
-          breadcrumbStackPayments.push({ id: item.id, name: item.name });
-          updateBreadcrumbPayments();
-          browsePaymentsFolder(item.id);
-        } else {
-          document.querySelectorAll("#payments-file-browser .browser-item").forEach(el => el.classList.remove("selected"));
-          div.classList.add("selected");
-          selectedPaymentsFileId = item.id;
-          document.getElementById("selected-payments-file-name").textContent = item.name;
-          document.getElementById("selected-payments-file").style.display = "block";
-          document.getElementById("preview-payments-btn").style.display = "inline-block";
-          setPaymentsStatus("");
-        }
-      };
-      browser.appendChild(div);
-    });
-    updateBreadcrumbPayments();
-  } catch (error) {
-    browser.innerHTML = `<div style='padding:12px;color:red;'>Error: ${error.message}</div>`;
-  }
-}
-
-// ── BREADCRUMBS ───────────────────────────────────────────────
-function updateBreadcrumb() {
-  const breadcrumb = document.getElementById("breadcrumb");
-  breadcrumb.innerHTML = breadcrumbStack.map((crumb, index) => {
-    if (index === breadcrumbStack.length - 1) return `📁 ${crumb.name}`;
+  el.innerHTML = b.stack.map((crumb, index) => {
+    if (index === b.stack.length - 1) return `📁 ${crumb.name}`;
     return `<span data-index="${index}">${crumb.name}</span> › `;
   }).join("");
-  breadcrumb.querySelectorAll("span").forEach((span) => {
+
+  el.querySelectorAll("span[data-index]").forEach((span) => {
     span.onclick = () => {
       const index = parseInt(span.getAttribute("data-index"));
-      breadcrumbStack = breadcrumbStack.slice(0, index + 1);
-      browseFolder(breadcrumbStack[breadcrumbStack.length - 1].id);
+      b.stack = b.stack.slice(0, index + 1);
+      browseFolder(browserKey, b.stack[b.stack.length - 1].id);
     };
   });
 }
 
-function updateBreadcrumbPayments() {
-  const breadcrumb = document.getElementById("payments-breadcrumb");
-  breadcrumb.innerHTML = breadcrumbStackPayments.map((crumb, index) => {
-    if (index === breadcrumbStackPayments.length - 1) return `📁 ${crumb.name}`;
-    return `<span data-index="${index}">${crumb.name}</span> › `;
-  }).join("");
-  breadcrumb.querySelectorAll("span").forEach((span) => {
-    span.onclick = () => {
-      const index = parseInt(span.getAttribute("data-index"));
-      breadcrumbStackPayments = breadcrumbStackPayments.slice(0, index + 1);
-      browsePaymentsFolder(breadcrumbStackPayments[breadcrumbStackPayments.length - 1].id);
-    };
-  });
+// ── FILE SELECTION CALLBACKS ──────────────────────────────────
+function onSubmissionFileSelected(item) {
+  selectedFileId = item.id;
+  document.getElementById("selected-file-name").textContent = item.name;
+  document.getElementById("selected-file").style.display    = "block";
+  document.getElementById("preview-btn").style.display      = "inline-block";
+  setStatus("");
+}
+
+function onPaymentsFileSelected(item) {
+  selectedPaymentsFileId = item.id;
+  document.getElementById("selected-payments-file-name").textContent = item.name;
+  document.getElementById("selected-payments-file").style.display    = "block";
+  document.getElementById("preview-payments-btn").style.display      = "inline-block";
+  setPaymentsStatus("");
 }
 
 // ── GET EMPLOYEE INITIALS FROM OPEN WORKBOOK ──────────────────
 async function getEmployeeInitials() {
   return await Excel.run(async (context) => {
-    const sheet = context.workbook.worksheets.getItem("PAYMENTS");
-    // B2:D2 is merged — reading B2 gives the full merged cell value
+    const sheet    = context.workbook.worksheets.getItem("PAYMENTS");
     const nameCell = sheet.getRange("B2");
     nameCell.load("values");
     await context.sync();
 
-    const fullName = nameCell.values[0][0]; // "LASTNAME, FIRSTNAME"
-    if (!fullName) throw new Error("Could not read employee name from cell B2 on PAYMENTS sheet.");
+    const fullName = nameCell.values[0][0];
+    if (!fullName) throw new Error("Could not read employee name from B2 on PAYMENTS sheet.");
 
-    // Convert "LASTNAME, FIRSTNAME" → initials "LF"
-    const parts = String(fullName).split(",").map(p => p.trim());
+    // "LASTNAME, FIRSTNAME" → "LF"
+    const parts        = String(fullName).split(",").map(p => p.trim());
     const lastInitial  = parts[0]?.[0]?.toUpperCase() || "";
     const firstInitial = parts[1]?.[0]?.toUpperCase() || "";
 
     return {
       initials: lastInitial + firstInitial,
-      fullName: String(fullName).trim(),
+      fullName:  String(fullName).trim(),
     };
   });
 }
 
-// ── READ SECRETARY PAYMENT FILE ───────────────────────────────
-async function readSecretaryPayments(fileId, employeeInitials) {
-  const response = await fetch(
-    `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/workbook/worksheets/Sheet1/usedRange`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
-
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error?.message || "Failed to read secretary payment file");
-  }
-
-  const data = await response.json();
-  const rows = data.values;
-
-  // Row 0 = date, Row 1 = headers, Row 2+ = data
-  // Based on confirmed structure:
-  // Index 0 = CLIENT, 1 = AMOUNT, 5 = BONDSMAN
-  const CLIENT_COL   = 0;
-  const AMOUNT_COL   = 1;
-  const BONDSMAN_COL = 5;
-
-  const dataRows = rows.slice(2);
-  const matched = [];
-
-  for (const row of dataRows) {
-    const client   = String(row[CLIENT_COL]   ?? "").trim();
-    const amount   = row[AMOUNT_COL];
-    const bondsman = String(row[BONDSMAN_COL] ?? "").trim().toUpperCase();
-
-    // Skip empty rows
-    if (!client) continue;
-    if (amount === null || amount === "" || amount === undefined) continue;
-
-    // Only include rows matching this employee's initials
-    if (bondsman !== employeeInitials.toUpperCase()) continue;
-
-    matched.push({
-      client:   client.toUpperCase(),
-      amount:   Number(amount) || 0,
-      bondsman,
-    });
-  }
-
-  return matched;
-}
-
 // ── READ SUBMISSION FILE ──────────────────────────────────────
 async function readSubmissionData(fileId) {
-  const response = await fetch(
-    `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/workbook/worksheets/Sheet1/usedRange`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
+  const response = await graphFetch(
+    `items/${fileId}/workbook/worksheets/Sheet1/usedRange`
   );
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error?.message || "Failed to read submission file");
-  }
-  const data = await response.json();
-  const rows = data.values;
-  const dataRows = rows.slice(3);
-  const bonds = [];
-  for (const row of dataRows) {
+  const rows     = response.values;
+  const dataRows = rows.slice(3); // skip title, dates, headers
+
+  return dataRows.reduce((bonds, row) => {
     const lastName  = row[2];
     const firstName = row[3];
     const ttlBond   = row[4];
     const amtChgd   = row[6];
     const amtCol    = row[7];
     const expense   = row[8];
-    if (!lastName || !ttlBond) continue;
-    if (String(lastName).toUpperCase().includes("TOTAL")) continue;
-    const client = `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`;
-    const startBalance = (Number(amtChgd) || 0) - (Number(amtCol) || 0);
+
+    if (!lastName || !ttlBond) return bonds;
+    if (String(lastName).toUpperCase().includes("TOTAL")) return bonds;
+
     bonds.push({
-      client,
+      client:       `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`,
       ttlBond:      Number(ttlBond) || 0,
       amtCharged:   Number(amtChgd) || 0,
       amtCollected: Number(amtCol)  || 0,
       expense:      Number(expense) || 0,
-      startBalance,
+      startBalance: (Number(amtChgd) || 0) - (Number(amtCol) || 0),
     });
-  }
-  return bonds;
+
+    return bonds;
+  }, []);
 }
 
-// ── PREVIEW PAYMENTS IMPORT ───────────────────────────────────
-async function previewPaymentsImport() {
-  if (!selectedPaymentsFileId) {
-    setPaymentsStatus("Please select a daily ledger file first.");
-    return;
-  }
+// ── READ SECRETARY LEDGER FILE ────────────────────────────────
+async function readSecretaryPayments(fileId, employeeInitials) {
+  const response = await graphFetch(
+    `items/${fileId}/workbook/worksheets/Sheet1/usedRange`
+  );
+  const rows     = response.values;
+  const dataRows = rows.slice(2); // skip date row and header row
 
-  setPaymentsStatus("Reading daily ledger...");
-  document.getElementById("preview-payments-section").style.display = "none";
+  return dataRows.reduce((matched, row) => {
+    const client   = String(row[LEDGER_CLIENT_COL]   ?? "").trim();
+    const amount   = row[LEDGER_AMOUNT_COL];
+    const bondsman = String(row[LEDGER_BONDSMAN_COL] ?? "").trim().toUpperCase();
 
-  try {
-    const { initials, fullName } = await getEmployeeInitials();
-    document.getElementById("detected-employee").textContent = `${fullName} (${initials})`;
-    document.getElementById("employee-badge").style.display = "block";
+    if (!client) return matched;
+    if (amount === null || amount === "" || amount === undefined) return matched;
+    if (bondsman !== employeeInitials.toUpperCase()) return matched;
 
-    const matched = await readSecretaryPayments(selectedPaymentsFileId, initials);
-
-    if (matched.length === 0) {
-      setPaymentsStatus(`No payments found for bondsman "${initials}" in this file.`);
-      return;
-    }
-
-    const tableRows = await Excel.run(async (context) => {
-      const table = context.workbook.tables.getItem("PaymentsTable");
-      const bodyRange = table.getDataBodyRange();
-      bodyRange.load("values");
-      await context.sync();
-      return bodyRange.values;
+    matched.push({
+      client:   client.toUpperCase(),
+      amount:   Number(amount) || 0,
+      bondsman,
     });
 
-    const paymentsTableClients = tableRows.map((row, idx) => ({
-      rowIndex: idx,
-      client:              String(row[0]  || "").toUpperCase().trim(),
-      currentStartBalance: row[6],
-      currentEndBalance:   row[8],
-    }));
-
-    const previews = [];
-    const unmatched = [];
-
-    for (const payment of matched) {
-      const tableMatch = paymentsTableClients.find(
-        r => r.client === payment.client && r.client !== ""
-      );
-
-      if (tableMatch) {
-        previews.push({
-          client:       payment.client,
-          amount:       payment.amount,
-          rowIndex:     tableMatch.rowIndex,
-          startBalance: tableMatch.currentStartBalance,
-          projectedEnd: (Number(tableMatch.currentStartBalance) || 0) - payment.amount,
-        });
-      } else {
-        unmatched.push(payment.client);
-      }
-    }
-
-    pendingPaymentRows = previews;
-
-    const tbody = document.getElementById("preview-payments-tbody");
-    tbody.innerHTML = "";
-    previews.forEach((row) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${row.client}</td>
-        <td>$${Number(row.startBalance || 0).toLocaleString()}</td>
-        <td>$${row.amount.toLocaleString()}</td>
-        <td>$${row.projectedEnd.toLocaleString()}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-
-    const warningEl = document.getElementById("payments-unmatched-warning");
-    if (unmatched.length > 0) {
-      warningEl.textContent = `⚠ ${unmatched.length} payment(s) had no match in PaymentsTable: ${unmatched.join(", ")}`;
-      warningEl.style.display = "block";
-    } else {
-      warningEl.style.display = "none";
-    }
-
-    document.getElementById("import-payments-summary").style.display = "none";
-    document.getElementById("preview-payments-section").style.display = "block";
-    document.getElementById("confirm-payments-btn").disabled = previews.length === 0;
-
-    setPaymentsStatus(
-      `${previews.length} payment${previews.length !== 1 ? "s" : ""} matched and ready to apply.`
-    );
-
-  } catch (error) {
-    setPaymentsStatus("Error: " + error.message);
-    console.error(error);
-  }
+    return matched;
+  }, []);
 }
 
-function cancelPaymentsImport() {
-  pendingPaymentRows = [];
-  document.getElementById("preview-payments-section").style.display = "none";
-  setPaymentsStatus("Payment import cancelled.");
-}
-
-// ── CONFIRM PAYMENTS IMPORT ───────────────────────────────────
-async function confirmPaymentsImport() {
-  if (!pendingPaymentRows.length) return;
-
-  document.getElementById("confirm-payments-btn").disabled = true;
-  setPaymentsStatus("Applying payments...");
-
-  try {
-    await Excel.run(async (context) => {
-      const table = context.workbook.tables.getItem("PaymentsTable");
-      const bodyRange = table.getDataBodyRange();
-      bodyRange.load("values, rowCount, columnCount");
-      await context.sync();
-
-      for (const payment of pendingPaymentRows) {
-        const rowIndex = payment.rowIndex;
-
-        // ── Write AMOUNT into AMT OF PAYMENT (col H, index 7) ──
-        const amtOfPaymentCell = bodyRange.getCell(rowIndex, 7);
-        amtOfPaymentCell.values = [[payment.amount]];
-        await context.sync();
-
-        // ── Read the recalculated END BALANCE (col I, index 8) ─
-        const endBalanceCell = bodyRange.getCell(rowIndex, 8);
-        endBalanceCell.load("values");
-        await context.sync();
-
-        const newEndBalance = endBalanceCell.values[0][0];
-
-        // ── Write END BALANCE value → START BALANCE (col G, index 6) ─
-        const startBalanceCell = bodyRange.getCell(rowIndex, 6);
-        startBalanceCell.values = [[newEndBalance]];
-
-        // ── Clear AMT OF PAYMENT (col H, index 7) ──────────────
-        const clearAmtCell = bodyRange.getCell(rowIndex, 7);
-        clearAmtCell.values = [[""]];
-
-        await context.sync();
-      }
-    });
-
-    const summary = document.getElementById("import-payments-summary");
-    summary.className = "import-summary";
-    summary.textContent = `✔ Successfully applied ${pendingPaymentRows.length} payment${pendingPaymentRows.length !== 1 ? "s" : ""} and updated START BALANCE.`;
-    summary.style.display = "block";
-    pendingPaymentRows = [];
-    document.getElementById("confirm-payments-btn").disabled = false;
-    setPaymentsStatus("");
-
-  } catch (error) {
-    const summary = document.getElementById("import-payments-summary");
-    summary.className = "import-summary error";
-    summary.textContent = `✖ Payment import failed: ${error.message}`;
-    summary.style.display = "block";
-    document.getElementById("confirm-payments-btn").disabled = false;
-    console.error(error);
-    setPaymentsStatus("");
+// ── GRAPH API HELPER ──────────────────────────────────────────
+async function graphFetch(path) {
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/drive/${path}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error?.message || `Graph request failed: ${path}`);
   }
+  return response.json();
 }
 
 // ── PREVIEW BOND IMPORT ───────────────────────────────────────
@@ -566,31 +369,33 @@ async function previewImport() {
   }
   setStatus("Reading submission...");
   document.getElementById("preview-section").style.display = "none";
+
   try {
     const bonds = await readSubmissionData(selectedFileId);
-    if (bonds.length === 0) {
+    if (!bonds.length) {
       setStatus("No bond entries found in the submission file.");
       return;
     }
+
     pendingImportRows = bonds;
+
     const tbody = document.getElementById("preview-tbody");
-    tbody.innerHTML = "";
-    bonds.forEach((bond) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
+    tbody.innerHTML = bonds.map(bond => `
+      <tr>
         <td>${bond.client}</td>
         <td>$${bond.ttlBond.toLocaleString()}</td>
         <td>$${bond.amtCharged.toLocaleString()}</td>
         <td>$${bond.amtCollected.toLocaleString()}</td>
         <td>$${bond.expense.toLocaleString()}</td>
         <td>$${bond.startBalance.toLocaleString()}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-    document.getElementById("import-summary").style.display = "none";
-    document.getElementById("preview-section").style.display = "block";
-    document.getElementById("confirm-import-btn").disabled = false;
+      </tr>
+    `).join("");
+
+    document.getElementById("import-summary").style.display   = "none";
+    document.getElementById("preview-section").style.display  = "block";
+    document.getElementById("confirm-import-btn").disabled    = false;
     setStatus(`${bonds.length} bond${bonds.length > 1 ? "s" : ""} ready to import.`);
+
   } catch (error) {
     setStatus("Error reading submission: " + error.message);
     console.error(error);
@@ -608,92 +413,231 @@ async function confirmImport() {
   if (!pendingImportRows.length) return;
   document.getElementById("confirm-import-btn").disabled = true;
   setStatus("Importing...");
+
   try {
     await Excel.run(async (context) => {
-      const table = context.workbook.tables.getItem("PaymentsTable");
+      const table     = context.workbook.tables.getItem("PaymentsTable");
       const bodyRange = table.getDataBodyRange();
       bodyRange.load("values, rowCount, columnCount");
       await context.sync();
 
-      const colCount = bodyRange.columnCount;
+      const colCount        = bodyRange.columnCount;
       const currentRowCount = bodyRange.rowCount;
 
-      const compacted = bodyRange.values.filter(row => {
-        const clientVal = row[0];
-        return clientVal !== null && clientVal !== "" && clientVal !== undefined;
-      });
+      // Compact — remove empty rows
+      const compacted = bodyRange.values.filter(row =>
+        row[PT_CLIENT] !== null && row[PT_CLIENT] !== "" && row[PT_CLIENT] !== undefined
+      );
 
+      // Build new rows
       const newRows = pendingImportRows.map(bond => {
         const row = new Array(colCount).fill("");
-        row[0]  = bond.client;
-        row[1]  = bond.ttlBond;
-        row[2]  = bond.amtCharged;
-        row[3]  = bond.amtCollected;
-        row[4]  = bond.expense;
-        row[6]  = bond.startBalance;
+        row[PT_CLIENT]      = bond.client;
+        row[PT_TTL_BOND]    = bond.ttlBond;
+        row[PT_AMT_CHARGED] = bond.amtCharged;
+        row[PT_AMT_COLLECT] = bond.amtCollected;
+        row[PT_EXPENSE]     = bond.expense;
+        row[PT_START_BAL]   = bond.startBalance;
         return row;
       });
 
-      const allRows = [...compacted, ...newRows];
+      const allRows        = [...compacted, ...newRows];
       const neededRowCount = allRows.length;
 
+      // Grow table if needed
       if (neededRowCount > currentRowCount) {
-        const rowsToAdd = neededRowCount - currentRowCount;
-        for (let i = 0; i < rowsToAdd; i++) {
+        for (let i = 0; i < neededRowCount - currentRowCount; i++) {
           table.rows.add(null, [new Array(colCount).fill("")]);
         }
         await context.sync();
       }
 
+      // Write all rows back
       const freshBody = table.getDataBodyRange();
       freshBody.load("rowCount");
       await context.sync();
 
-      const writeRange = freshBody.getCell(0, 0)
-        .getResizedRange(allRows.length - 1, colCount - 1);
-      writeRange.values = allRows;
+      freshBody.getCell(0, 0)
+        .getResizedRange(allRows.length - 1, colCount - 1)
+        .values = allRows;
 
-      const newRowStartIndex = compacted.length;
+      // Write formulas into new rows only
+      const newRowStart = compacted.length;
       for (let i = 0; i < pendingImportRows.length; i++) {
-        const rowIndex = newRowStartIndex + i;
-        freshBody.getCell(rowIndex, 8).formulas  = [["=[@[START BALANCE]]-[@[AMT OF PAYMENT]]"]];
-        freshBody.getCell(rowIndex, 10).formulas = [["=[@[BALANCE OWED]]-[@[PAYMENT]]"]];
-        freshBody.getCell(rowIndex, 11).formulas = [["=[@[AMT OF PAYMENT]]*[@[% PAID ON BOND]]"]];
+        const ri = newRowStart + i;
+        freshBody.getCell(ri, PT_END_BAL).formulas    = [["=[@[START BALANCE]]-[@[AMT OF PAYMENT]]"]];
+        freshBody.getCell(ri, PT_ENDING_BAL).formulas = [["=[@[BALANCE OWED]]-[@[PAYMENT]]"]];
+        freshBody.getCell(ri, PT_PAYMENT).formulas    = [["=[@[AMT OF PAYMENT]]*[@[% PAID ON BOND]]"]];
       }
 
+      // Clear leftover rows if table shrank
       if (freshBody.rowCount > neededRowCount) {
-        const leftoverCount = freshBody.rowCount - neededRowCount;
-        const clearRange = freshBody.getCell(neededRowCount, 0)
-          .getResizedRange(leftoverCount - 1, colCount - 1);
-        clearRange.clear("Contents");
+        freshBody.getCell(neededRowCount, 0)
+          .getResizedRange(freshBody.rowCount - neededRowCount - 1, colCount - 1)
+          .clear("Contents");
       }
 
       await context.sync();
     });
 
-    const summary = document.getElementById("import-summary");
-    summary.className = "import-summary";
-    summary.textContent = `✔ Successfully imported ${pendingImportRows.length} bond${pendingImportRows.length > 1 ? "s" : ""} into PaymentsTable.`;
-    summary.style.display = "block";
+    showSummary("import-summary", `✔ Successfully imported ${pendingImportRows.length} bond${pendingImportRows.length > 1 ? "s" : ""} into PaymentsTable.`, false);
     pendingImportRows = [];
     document.getElementById("confirm-import-btn").disabled = false;
     setStatus("");
+
   } catch (error) {
-    const summary = document.getElementById("import-summary");
-    summary.className = "import-summary error";
-    summary.textContent = `✖ Import failed: ${error.message}`;
-    summary.style.display = "block";
+    showSummary("import-summary", `✖ Import failed: ${error.message}`, true);
     document.getElementById("confirm-import-btn").disabled = false;
     console.error(error);
-    setStatus("");
+  }
+}
+
+// ── PREVIEW PAYMENTS IMPORT ───────────────────────────────────
+async function previewPaymentsImport() {
+  if (!selectedPaymentsFileId) {
+    setPaymentsStatus("Please select a daily ledger file first.");
+    return;
+  }
+  setPaymentsStatus("Reading daily ledger...");
+  document.getElementById("preview-payments-section").style.display = "none";
+
+  try {
+    const { initials, fullName } = await getEmployeeInitials();
+    document.getElementById("detected-employee").textContent    = `${fullName} (${initials})`;
+    document.getElementById("employee-badge").style.display     = "block";
+
+    const matched = await readSecretaryPayments(selectedPaymentsFileId, initials);
+    if (!matched.length) {
+      setPaymentsStatus(`No payments found for bondsman "${initials}" in this file.`);
+      return;
+    }
+
+    // Load PaymentsTable rows for cross-referencing
+    const tableRows = await Excel.run(async (context) => {
+      const table     = context.workbook.tables.getItem("PaymentsTable");
+      const bodyRange = table.getDataBodyRange();
+      bodyRange.load("values");
+      await context.sync();
+      return bodyRange.values;
+    });
+
+    const tableClients = tableRows.map((row, idx) => ({
+      rowIndex:    idx,
+      client:      String(row[PT_CLIENT]    || "").toUpperCase().trim(),
+      startBalance: row[PT_START_BAL],
+    }));
+
+    const previews   = [];
+    const unmatched  = [];
+
+    for (const payment of matched) {
+      const match = tableClients.find(r => r.client === payment.client && r.client !== "");
+      if (match) {
+        previews.push({
+          client:       payment.client,
+          amount:       payment.amount,
+          rowIndex:     match.rowIndex,
+          startBalance: match.startBalance,
+          projectedEnd: (Number(match.startBalance) || 0) - payment.amount,
+        });
+      } else {
+        unmatched.push(payment.client);
+      }
+    }
+
+    pendingPaymentRows = previews;
+
+    const tbody = document.getElementById("preview-payments-tbody");
+    tbody.innerHTML = previews.map(row => `
+      <tr>
+        <td>${row.client}</td>
+        <td>$${Number(row.startBalance || 0).toLocaleString()}</td>
+        <td>$${row.amount.toLocaleString()}</td>
+        <td>$${row.projectedEnd.toLocaleString()}</td>
+      </tr>
+    `).join("");
+
+    const warningEl = document.getElementById("payments-unmatched-warning");
+    if (unmatched.length) {
+      warningEl.textContent  = `⚠ ${unmatched.length} payment(s) had no match in PaymentsTable: ${unmatched.join(", ")}`;
+      warningEl.style.display = "block";
+    } else {
+      warningEl.style.display = "none";
+    }
+
+    document.getElementById("import-payments-summary").style.display    = "none";
+    document.getElementById("preview-payments-section").style.display   = "block";
+    document.getElementById("confirm-payments-btn").disabled             = !previews.length;
+
+    setPaymentsStatus(`${previews.length} payment${previews.length !== 1 ? "s" : ""} matched and ready to apply.`);
+
+  } catch (error) {
+    setPaymentsStatus("Error: " + error.message);
+    console.error(error);
+  }
+}
+
+function cancelPaymentsImport() {
+  pendingPaymentRows = [];
+  document.getElementById("preview-payments-section").style.display = "none";
+  setPaymentsStatus("Payment import cancelled.");
+}
+
+// ── CONFIRM PAYMENTS IMPORT ───────────────────────────────────
+async function confirmPaymentsImport() {
+  if (!pendingPaymentRows.length) return;
+  document.getElementById("confirm-payments-btn").disabled = true;
+  setPaymentsStatus("Applying payments...");
+
+  try {
+    await Excel.run(async (context) => {
+      const table     = context.workbook.tables.getItem("PaymentsTable");
+      const bodyRange = table.getDataBodyRange();
+      bodyRange.load("values, rowCount, columnCount");
+      await context.sync();
+
+      for (const payment of pendingPaymentRows) {
+        const ri = payment.rowIndex;
+
+        // Write payment amount into AMT OF PAYMENT
+        bodyRange.getCell(ri, PT_AMT_PAYMENT).values = [[payment.amount]];
+        await context.sync();
+
+        // Read recalculated END BALANCE
+        const endBalCell = bodyRange.getCell(ri, PT_END_BAL);
+        endBalCell.load("values");
+        await context.sync();
+
+        const newEndBalance = endBalCell.values[0][0];
+
+        // Write END BALANCE → START BALANCE, then clear AMT OF PAYMENT
+        bodyRange.getCell(ri, PT_START_BAL).values   = [[newEndBalance]];
+        bodyRange.getCell(ri, PT_AMT_PAYMENT).values = [[""]];
+        await context.sync();
+      }
+    });
+
+    showSummary(
+      "import-payments-summary",
+      `✔ Successfully applied ${pendingPaymentRows.length} payment${pendingPaymentRows.length !== 1 ? "s" : ""} and updated START BALANCE.`,
+      false
+    );
+    pendingPaymentRows = [];
+    document.getElementById("confirm-payments-btn").disabled = false;
+    setPaymentsStatus("");
+
+  } catch (error) {
+    showSummary("import-payments-summary", `✖ Payment import failed: ${error.message}`, true);
+    document.getElementById("confirm-payments-btn").disabled = false;
+    console.error(error);
   }
 }
 
 // ── UI HELPERS ────────────────────────────────────────────────
 function showMainSection(userName) {
   document.getElementById("sign-in-section").style.display = "none";
-  document.getElementById("main-section").style.display = "block";
-  document.getElementById("user-name").textContent = userName;
+  document.getElementById("main-section").style.display    = "block";
+  document.getElementById("user-name").textContent         = userName;
 }
 
 function setStatus(message) {
@@ -702,4 +646,11 @@ function setStatus(message) {
 
 function setPaymentsStatus(message) {
   document.getElementById("payments-status").textContent = message;
+}
+
+function showSummary(elementId, message, isError) {
+  const el       = document.getElementById(elementId);
+  el.className   = isError ? "import-summary error" : "import-summary";
+  el.textContent = message;
+  el.style.display = "block";
 }
