@@ -1,7 +1,7 @@
 /* global console, document, Office, Excel */
 
 // ── CONFIG ────────────────────────────────────────────────────
-const START_FOLDER_PATH = "BailBonds";
+const START_FOLDER_PATH = "BailBonds/EmployeeSubmissions";
 
 let accessToken = null;
 let selectedFileId = null;
