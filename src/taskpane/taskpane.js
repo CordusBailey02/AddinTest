@@ -350,6 +350,32 @@ async function confirmImport() {
         clearRange.clear("Contents");
       }
 
+      const newRowStartIndex = compacted.length;
+      
+      for (let i = 0; i < pendingImportRows.length; i++) {
+        const rowIndex = newRowStartIndex + i;
+        
+        // END BALANCE (col I, index 8)
+        const endBalCell = freshBody.getCell(rowIndex, 8);
+        endBalCell.formulas = [["=[@[START BALANCE]]-[@[AMT OF PAYMENT]]"]];
+        
+        // ENDING BALANCE (col K, index 10)
+        const endingBalCell = freshBody.getCell(rowIndex, 10);
+        endingBalCell.formulas = [["=[@[BALANCE OWED]]-[@[PAYMENT]]"]];
+        
+        // PAYMENT (col L, index 11)
+        const paymentCell = freshBody.getCell(rowIndex, 11);
+        paymentCell.formulas = [["=[@[AMT OF PAYMENT]]*[@[% PAID ON BOND]]"]];
+      }
+
+      // ── STEP 6: Clear leftover rows if table compacted ─────────
+      if (freshBody.rowCount > neededRowCount) {
+        const leftoverCount = freshBody.rowCount - neededRowCount;
+        const clearRange = freshBody.getCell(neededRowCount, 0)
+          .getResizedRange(leftoverCount - 1, colCount - 1);
+        clearRange.clear("Contents");
+      }
+
       await context.sync();
     });
 
