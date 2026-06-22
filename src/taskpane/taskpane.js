@@ -769,18 +769,25 @@ async function confirmImport() {
     await Excel.run(async (context) => {
       const table     = context.workbook.tables.getItem("PaymentsTable");
       const bodyRange = table.getDataBodyRange();
-      bodyRange.load("values, rowCount, columnCount");
+      bodyRange.load("values, formulas, rowCount, columnCount");
       await context.sync();
 
       const colCount        = bodyRange.columnCount;
       const currentRowCount = bodyRange.rowCount;
 
-      // Compact existing rows
-      const compacted = bodyRange.values.filter(row =>
-        row[PT_CLIENT] !== null && row[PT_CLIENT] !== "" && row[PT_CLIENT] !== undefined
-      );
+      // ── STEP 1: Compact — preserve both values AND formulas ───
+      const compactedValues   = [];
+      const compactedFormulas = [];
 
-      // Build new rows — track which succeed and fail
+      for (let i = 0; i < currentRowCount; i++) {
+        const clientVal = bodyRange.values[i][PT_CLIENT];
+        if (clientVal !== null && clientVal !== "" && clientVal !== undefined) {
+          compactedValues.push(bodyRange.values[i]);
+          compactedFormulas.push(bodyRange.formulas[i]);
+        }
+      }
+
+      // ── STEP 2: Build new rows ────────────────────────────────
       const newRows = [];
       for (const bond of pendingImportRows) {
         try {
@@ -791,16 +798,16 @@ async function confirmImport() {
           row[PT_AMT_COLLECT] = bond.amtCollected;
           row[PT_EXPENSE]     = bond.expense;
           row[PT_START_BAL]   = bond.startBalance;
-          newRows.push(row);
+          newRows.push({ values: row });
           succeeded.push(bond);
         } catch (err) {
           failed.push({ bond, reason: err.message });
         }
       }
 
-      const allRows        = [...compacted, ...newRows];
-      const neededRowCount = allRows.length;
+      const neededRowCount = compactedValues.length + newRows.length;
 
+      // ── STEP 3: Grow table if needed ──────────────────────────
       if (neededRowCount > currentRowCount) {
         for (let i = 0; i < neededRowCount - currentRowCount; i++) {
           table.rows.add(null, [new Array(colCount).fill("")]);
@@ -812,19 +819,38 @@ async function confirmImport() {
       freshBody.load("rowCount");
       await context.sync();
 
-      freshBody.getCell(0, 0)
-        .getResizedRange(allRows.length - 1, colCount - 1)
-        .values = allRows;
+      // ── STEP 4: Write compacted rows back preserving formulas ─
+      for (let i = 0; i < compactedValues.length; i++) {
+        const rowRange = freshBody.getCell(i, 0).getResizedRange(0, colCount - 1);
 
-      // Write formulas into new rows
-      const newRowStart = compacted.length;
+        // Write values first for non-formula cells
+        rowRange.values = [compactedValues[i]];
+
+        // Restore formulas — only write cells that actually had a formula
+        // (formula cells show the formula string starting with "=")
+        const formulaRow = compactedFormulas[i];
+        for (let col = 0; col < colCount; col++) {
+          const formula = formulaRow[col];
+          if (typeof formula === "string" && formula.startsWith("=")) {
+            freshBody.getCell(i, col).formulas = [[formula]];
+          }
+        }
+      }
+
+      // ── STEP 5: Write new rows and their formulas ─────────────
+      const newRowStart = compactedValues.length;
       for (let i = 0; i < newRows.length; i++) {
-        const ri = newRowStart + i;
+        const ri       = newRowStart + i;
+        const rowRange = freshBody.getCell(ri, 0).getResizedRange(0, colCount - 1);
+        rowRange.values = [newRows[i].values];
+
+        // Write structured reference formulas for new rows
         freshBody.getCell(ri, PT_END_BAL).formulas    = [["=[@[START BALANCE]]-[@[AMT OF PAYMENT]]"]];
         freshBody.getCell(ri, PT_ENDING_BAL).formulas = [["=[@[BALANCE OWED]]-[@[PAYMENT]]"]];
         freshBody.getCell(ri, PT_PAYMENT).formulas    = [["=[@[AMT OF PAYMENT]]*[@[% PAID ON BOND]]"]];
       }
 
+      // ── STEP 6: Clear leftover rows ───────────────────────────
       if (freshBody.rowCount > neededRowCount) {
         freshBody.getCell(neededRowCount, 0)
           .getResizedRange(freshBody.rowCount - neededRowCount - 1, colCount - 1)
@@ -834,38 +860,28 @@ async function confirmImport() {
       await context.sync();
     });
 
-    // Mark processed rows green in source file
+    // Mark rows green in source file
     if (succeeded.length && selectedFileId) {
       showLoading("Marking rows as processed...");
       const successExcelRows = submissionSourceRows
         .filter((_, i) => i < succeeded.length)
         .map(r => r.excelRow);
-
-      const sheetName = (await readSubmissionData(selectedFileId)).sheetName;
-      await markRowsProcessed(
-        selectedFileId,
-        sheetName,
-        successExcelRows,
-        null // no timestamp column for submission
-      );
+      const { sheetName } = await readSubmissionData(selectedFileId);
+      await markRowsProcessed(selectedFileId, sheetName, successExcelRows, null);
     }
 
-    // Build result message
     let message = `✔ Successfully imported ${succeeded.length} bond${succeeded.length !== 1 ? "s" : ""}.`;
     if (failed.length) {
-      message += ` ⚠ ${failed.length} row${failed.length !== 1 ? "s" : ""} skipped:\n`;
+      message += `\n⚠ ${failed.length} row${failed.length !== 1 ? "s" : ""} skipped:\n`;
       message += failed.map(f => `• ${f.bond.client}: ${f.reason}`).join("\n");
     }
 
     showSummary("import-summary", message, failed.length > 0 && !succeeded.length);
     pendingImportRows = [];
     document.getElementById("confirm-import-btn").disabled = false;
-
-    // Enable archive button
     submissionImportDone = true;
     document.getElementById("archive-submission-btn").style.display = "inline-block";
     document.getElementById("archive-submission-btn").disabled      = false;
-
     hideLoading();
     setStatus("");
 
@@ -1015,63 +1031,68 @@ async function confirmPaymentsImport() {
         try {
           const ri = payment.rowIndex;
 
+          // ── 1. Write AMT OF PAYMENT ───────────────────────────
+          // This triggers PAYMENT (col L) and ENDING BALANCE (col K) to recalc
           bodyRange.getCell(ri, PT_AMT_PAYMENT).values = [[payment.amount]];
           await context.sync();
 
-          const endBalCell = bodyRange.getCell(ri, PT_END_BAL);
+          // ── 2. Read recalculated PAYMENT and ENDING BALANCE ───
+          const paymentCell      = bodyRange.getCell(ri, PT_PAYMENT);
+          const endingBalCell    = bodyRange.getCell(ri, PT_ENDING_BAL);
+          const endBalCell       = bodyRange.getCell(ri, PT_END_BAL);
+          paymentCell.load("values");
+          endingBalCell.load("values");
           endBalCell.load("values");
           await context.sync();
 
-          const newEndBalance = endBalCell.values[0][0];
-          bodyRange.getCell(ri, PT_START_BAL).values   = [[newEndBalance]];
-          bodyRange.getCell(ri, PT_AMT_PAYMENT).values = [[""]];
-          await context.sync();
+          const newEndingBalance = endingBalCell.values[0][0]; // col K
+          const newEndBalance    = endBalCell.values[0][0];    // col I
 
+          // ── 3. Write ENDING BALANCE → BALANCE OWED (col J) ───
+          bodyRange.getCell(ri, PT_BAL_OWED).values = [[newEndingBalance]];
+
+          // ── 4. Write END BALANCE → START BALANCE (col G) ─────
+          bodyRange.getCell(ri, PT_START_BAL).values = [[newEndBalance]];
+
+          // ── 5. Clear AMT OF PAYMENT (col H) ──────────────────
+          bodyRange.getCell(ri, PT_AMT_PAYMENT).values = [[""]];
+
+          await context.sync();
           succeeded.push(payment);
+
         } catch (err) {
           failed.push({ payment, reason: err.message });
         }
       }
     });
 
-    // Mark matched rows green + add timestamp in source ledger file
+    // Mark rows green + timestamp in source ledger
     if (succeeded.length && selectedPaymentsFileId) {
       showLoading("Marking rows as processed...");
-
-      // Find the last used column to put timestamp in the next one
-      const rangeData = await graphFetch(
+      const rangeData     = await graphFetch(
         `items/${selectedPaymentsFileId}/workbook/worksheets/Sheet1/usedRange?$select=columnCount`
       );
-      const stampColIndex = (rangeData.columnCount || 12); // next column after last used
-
-      const { sheetName } = await readSecretaryPayments(
-        selectedPaymentsFileId,
-        (await getEmployeeInitials()).initials
-      );
-
+      const stampColIndex = rangeData.columnCount || 12;
+      const { initials }  = await getEmployeeInitials();
+      const { sheetName } = await readSecretaryPayments(selectedPaymentsFileId, initials);
       const successExcelRows = succeeded.map(p => p.excelRow);
       await markRowsProcessed(
-        selectedPaymentsFileId,
-        sheetName,
-        successExcelRows,
-        stampColIndex // write timestamp here
+        selectedPaymentsFileId, sheetName, successExcelRows, stampColIndex
       );
     }
 
-    let message = `✔ Applied ${succeeded.length} payment${succeeded.length !== 1 ? "s" : ""} and updated START BALANCE.`;
+    let message = `✔ Applied ${succeeded.length} payment${succeeded.length !== 1 ? "s" : ""} and updated balances.`;
     if (failed.length) {
-      message += ` ⚠ ${failed.length} skipped:\n`;
+      message += `\n⚠ ${failed.length} skipped:\n`;
       message += failed.map(f => `• ${f.payment.client}: ${f.reason}`).join("\n");
     }
 
     showSummary("import-payments-summary", message, failed.length > 0 && !succeeded.length);
     pendingPaymentRows = [];
     document.getElementById("confirm-payments-btn").disabled = false;
-
     paymentsImportDone = true;
     document.getElementById("archive-payments-btn").style.display = "inline-block";
     document.getElementById("archive-payments-btn").disabled      = false;
-
     hideLoading();
     setPaymentsStatus("");
 
