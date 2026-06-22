@@ -519,20 +519,22 @@ async function archiveFile(fileId, fileName, parentFolderId) {
 }
 
 async function getOrCreateArchiveFolder(parentFolderId) {
-  // Try to find existing Archive folder
+  // Look for folder named 'WeeklyBondsArchive' — change this constant to rename
+  const ARCHIVE_FOLDER_NAME = "WeeklyBondsArchive";
+
   try {
     const data  = await graphFetch(`items/${parentFolderId}/children?$select=id,name,folder`);
     const found = data.value.find(
-      item => item.folder && item.name.toLowerCase() === "archive"
+      item => item.folder && item.name.toLowerCase() === ARCHIVE_FOLDER_NAME.toLowerCase()
     );
     if (found) return found.id;
   } catch { /* not found, will create */ }
 
-  // Create Archive folder
+  // Create the archive folder
   const created = await graphFetch(`items/${parentFolderId}/children`, {
     method: "POST",
     body: JSON.stringify({
-      name:   "Archive",
+      name:   ARCHIVE_FOLDER_NAME,
       folder: {},
       "@microsoft.graph.conflictBehavior": "rename",
     }),
@@ -560,8 +562,26 @@ async function archiveSubmissionFile() {
       selectedFileId, selectedFileName, selectedFileParentId
     );
     showNotification(`✔ Archived as "${archiveName}"`, "success");
-    document.getElementById("archive-submission-btn").disabled = true;
-    selectedFileId = null;
+
+    // Reset submission section state
+    selectedFileId       = null;
+    selectedFileName     = null;
+    selectedFileParentId = null;
+    submissionImportDone = false;
+    submissionSourceRows = [];
+    pendingImportRows    = [];
+
+    // Hide everything and refresh the browser back to start folder
+    document.getElementById("selected-file").style.display          = "none";
+    document.getElementById("preview-btn").style.display            = "none";
+    document.getElementById("preview-section").style.display        = "none";
+    document.getElementById("archive-submission-btn").style.display = "none";
+    document.getElementById("import-summary").style.display         = "none";
+    setStatus("");
+
+    // Refresh browser to show updated folder contents
+    await navigateBrowserToFolder("submission", START_FOLDER_PATH);
+
   } catch (error) {
     showNotification(`✖ Archive failed: ${error.message}`, "error");
   }
@@ -577,8 +597,28 @@ async function archivePaymentsFile() {
       selectedPaymentsFileId, selectedPaymentsFileName, selectedPaymentsFileParentId
     );
     showNotification(`✔ Archived as "${archiveName}"`, "success");
-    document.getElementById("archive-payments-btn").disabled = true;
-    selectedPaymentsFileId = null;
+
+    // Reset payments section state
+    selectedPaymentsFileId           = null;
+    selectedPaymentsFileName         = null;
+    selectedPaymentsFileParentId     = null;
+    paymentsImportDone               = false;
+    ledgerSourceRows                 = [];
+    pendingPaymentRows               = [];
+
+    // Hide everything and refresh the browser back to start folder
+    document.getElementById("selected-payments-file").style.display        = "none";
+    document.getElementById("preview-payments-btn").style.display          = "none";
+    document.getElementById("preview-payments-section").style.display      = "none";
+    document.getElementById("archive-payments-btn").style.display          = "none";
+    document.getElementById("import-payments-summary").style.display       = "none";
+    document.getElementById("employee-badge").style.display                = "none";
+    document.getElementById("payments-unmatched-warning").style.display    = "none";
+    setPaymentsStatus("");
+
+    // Refresh browser to show updated folder contents
+    await navigateBrowserToFolder("payments", START_FOLDER_PATH_PAYMENTS);
+
   } catch (error) {
     showNotification(`✖ Archive failed: ${error.message}`, "error");
   }
