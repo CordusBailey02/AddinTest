@@ -361,33 +361,120 @@ async function readSubmissionData(fileId) {
   const data      = await graphFetch(
     `items/${fileId}/workbook/worksheets('${encodeURIComponent(sheetName)}')/usedRange`
   );
-  const rows        = data.values;
-  const headerRow   = rows[SUBMISSION_HEADER_ROW] || [];
-  const dataRows    = rows.slice(SUBMISSION_DATA_START);
+  const rows      = data.values;
+  const headerRow = rows[SUBMISSION_HEADER_ROW] || [];
+  const dataRows  = rows.slice(SUBMISSION_DATA_START);
 
-  const bonds = [];
+  const bonds      = [];
   const sourceRows = [];
 
   dataRows.forEach((row, idx) => {
-    const lastName  = row[2];
-    const firstName = row[3];
-    const ttlBond   = row[4];
-    const amtChgd   = row[6];
-    const amtCol    = row[7];
-    const expense   = row[8];
+    // ── All raw submission columns ────────────────────────────
+    const date           = row[0];   // Col A - DATE
+    const jail           = row[1];   // Col B - JAIL
+    const lastName       = row[2];   // Col C - LAST NAME
+    const firstName      = row[3];   // Col D - FIRST NAME
+    const ttlBond        = row[4];   // Col E - TTL BOND AMOUNT
+    const bondNum        = row[5];   // Col F - #
+    const amtChgd        = row[6];   // Col G - TOTAL AMT CHGD
+    const amtCol         = row[7];   // Col H - TOTAL AMT COL
+    const expense        = row[8];   // Col I - TTL EXPENSE
+    const travel         = row[9];   // Col J - TRAVEL
+    const amtInEnv       = row[10];  // Col K - AMT IN ENV
+    const pymtType       = row[11];  // Col L - PYMT TYPE
+    const balanceOwedRaw = row[12];  // Col M - BALANCE OWED
+    const administration = row[13];  // Col N - ADMINISTRATION
 
+    // Skip empty rows and totals row
     if (!lastName || !ttlBond) return;
     if (String(lastName).toUpperCase().includes("TOTAL")) return;
 
-    const excelRow = SUBMISSION_DATA_START + idx + 1; // 1-based Excel row number
+    const excelRow = SUBMISSION_DATA_START + idx + 1;
+
+    // ── Numeric conversions ───────────────────────────────────
+    const ttlBondNum   = Number(ttlBond) || 0;
+    const amtChgdNum   = Number(amtChgd) || 0;
+    const amtColNum    = Number(amtCol)  || 0;
+    const expenseNum   = Number(expense) || 0;
+    const travelNum    = Number(travel)  || 0;
+
+    // ── COMPANY COST: Total cost company has incurred ─────────
+    // COMPANY_COST = (TTL BOND × 2.7%) + TTL EXPENSE + TRAVEL
+    const companyCost = (ttlBondNum * 0.027) + expenseNum + travelNum;
+
+    // ── NET: Amount collected minus company cost ──────────────
+    const net = amtColNum - companyCost;
+
+    // ── START BALANCE: What client still owes company ─────────
+    const startBalance = amtChgdNum - amtColNum;
+
+    // ── BALANCE OWED & % PAID ON BOND ─────────────────────────
+    let balanceOwed    = 0;
+    let pctPaidOnBond  = 0;
+    let initialPayment = 0;
+    let netIsNegative  = false;
+
+    if (net < 0) {
+      netIsNegative  = true;
+      balanceOwed    = 0;
+      pctPaidOnBond  = 0;
+      initialPayment = 0;
+    } else {
+      const rawDownPayment = net * 0.25;
+      initialPayment       = rawDownPayment < 25 ? 25 : rawDownPayment;
+      balanceOwed          = Math.max(0, net - initialPayment);
+      pctPaidOnBond        = startBalance > 0
+        ? parseFloat((balanceOwed / startBalance).toFixed(4))
+        : 0;
+    }
+
+    // Format date for display
+    let displayDate = "";
+    if (date instanceof Date || (typeof date === "string" && date)) {
+      displayDate = date instanceof Date
+        ? date.toLocaleDateString()
+        : String(date);
+    } else if (typeof date === "number") {
+      // Excel serial date number
+      const jsDate = new Date((date - 25569) * 86400 * 1000);
+      displayDate  = jsDate.toLocaleDateString();
+    }
 
     bonds.push({
-      client:       `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`,
-      ttlBond:      Number(ttlBond) || 0,
-      amtCharged:   Number(amtChgd) || 0,
-      amtCollected: Number(amtCol)  || 0,
-      expense:      Number(expense) || 0,
-      startBalance: (Number(amtChgd) || 0) - (Number(amtCol) || 0),
+      // ── Every raw column from submission ──────────────────
+      rawDate:        displayDate,
+      rawJail:        jail         ?? "",
+      lastName:       String(lastName).toUpperCase(),
+      firstName:      String(firstName).toUpperCase(),
+      rawTtlBond:     ttlBondNum,
+      rawBondNum:     bondNum      ?? "",
+      rawAmtChgd:     amtChgdNum,
+      rawAmtCol:      amtColNum,
+      rawExpense:     expenseNum,
+      rawTravel:      travelNum,
+      rawAmtInEnv:    amtInEnv     ?? "",
+      rawPymtType:    pymtType     ?? "",
+      rawBalanceOwed: balanceOwedRaw ?? "",
+      rawAdmin:       administration ?? "",
+
+      // ── Derived/combined fields ───────────────────────────
+      client:         `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`,
+      ttlBond:        ttlBondNum,
+      amtCharged:     amtChgdNum,
+      amtCollected:   amtColNum,
+      expense:        expenseNum,
+      travel:         travelNum,
+
+      // ── Calculated PAYMENTS fields ────────────────────────
+      companyCost,
+      net,
+      startBalance,
+      balanceOwed,
+      pctPaidOnBond,
+      initialPayment,
+      netIsNegative,
+
+      // ── Source tracking ───────────────────────────────────
       sourceRowIndex: idx,
       excelRow,
     });
@@ -708,7 +795,6 @@ async function previewImport() {
   document.getElementById("preview-section").style.display = "none";
 
   try {
-    // Pre-flight checks
     const errors = await runPreflightChecks();
     if (errors.length) {
       hideLoading();
@@ -716,7 +802,7 @@ async function previewImport() {
       return;
     }
 
-    const { bonds, headerRow, sourceRows } = await readSubmissionData(selectedFileId);
+    const { bonds, sourceRows } = await readSubmissionData(selectedFileId);
 
     if (!bonds.length) {
       hideLoading();
@@ -727,20 +813,71 @@ async function previewImport() {
     pendingImportRows    = bonds;
     submissionSourceRows = sourceRows;
 
-    // Build dynamic preview table from submission headers + bond data
-    // Map each bond to an array matching the header columns
-    const previewHeaders = ["CLIENT", "TTL BOND", "AMT CHARGED", "AMT COLLECTED", "EXPENSE", "START BALANCE"];
-    const previewRows    = bonds.map(b => [
-      b.client, b.ttlBond, b.amtCharged, b.amtCollected, b.expense, b.startBalance
+    // ── Section 1: ALL raw submission columns ─────────────────
+    // Show every column exactly as submitted — nothing omitted
+    const submissionHeaders = [
+      "DATE", "JAIL", "LAST NAME", "FIRST NAME",
+      "TTL BOND", "#", "AMT CHGD", "AMT COL",
+      "EXPENSE", "TRAVEL", "AMT IN ENV",
+      "PYMT TYPE", "BALANCE OWED", "ADMINISTRATION",
+    ];
+    const submissionRows = bonds.map(b => [
+      b.rawDate,
+      b.rawJail,
+      b.lastName,
+      b.firstName,
+      `$${b.rawTtlBond.toLocaleString()}`,
+      b.rawBondNum,
+      `$${b.rawAmtChgd.toLocaleString()}`,
+      `$${b.rawAmtCol.toLocaleString()}`,
+      `$${b.rawExpense.toLocaleString()}`,
+      `$${b.rawTravel.toLocaleString()}`,
+      b.rawAmtInEnv !== "" ? `$${Number(b.rawAmtInEnv).toLocaleString()}` : "—",
+      b.rawPymtType  || "—",
+      b.rawBalanceOwed !== "" ? `$${Number(b.rawBalanceOwed).toLocaleString()}` : "—",
+      b.rawAdmin     || "—",
     ]);
+    buildPreviewTable(
+      "preview-submission-table",
+      submissionHeaders,
+      submissionRows
+    );
 
-    buildPreviewTable("preview-table-container", previewHeaders, previewRows);
+    // ── Section 2: Calculated values going into PAYMENTS ─────
+    const paymentsHeaders = [
+      "CLIENT", "COMPANY COST", "NET",
+      "START BALANCE", "BALANCE OWED",
+      "% PAID ON BOND", "INITIAL PAYMENT", "NOTE",
+    ];
+    const paymentsRows = bonds.map(b => [
+      b.client,
+      `$${b.companyCost.toFixed(2)}`,
+      b.netIsNegative
+        ? `($${Math.abs(b.net).toFixed(2)})`
+        : `$${b.net.toFixed(2)}`,
+      `$${b.startBalance.toLocaleString()}`,
+      b.netIsNegative ? "TBD"                    : `$${b.balanceOwed.toFixed(2)}`,
+      b.netIsNegative ? "TBD"                    : `${(b.pctPaidOnBond * 100).toFixed(2)}%`,
+      b.netIsNegative ? "—"                      : `$${b.initialPayment.toFixed(2)}`,
+      b.netIsNegative
+        ? "⚠ Net negative — BALANCE OWED set to 0"
+        : b.initialPayment === 25
+          ? "Min. $25 applied"
+          : "",
+    ]);
+    buildPreviewTable(
+      "preview-payments-calc-table",
+      paymentsHeaders,
+      paymentsRows
+    );
 
     document.getElementById("import-summary").style.display  = "none";
     document.getElementById("preview-section").style.display = "block";
     document.getElementById("confirm-import-btn").disabled   = false;
     hideLoading();
-    setStatus(`${bonds.length} bond${bonds.length > 1 ? "s" : ""} ready to import.`);
+    setStatus(
+      `${bonds.length} bond${bonds.length > 1 ? "s" : ""} ready to import.`
+    );
 
   } catch (error) {
     hideLoading();
@@ -775,7 +912,7 @@ async function confirmImport() {
       const colCount        = bodyRange.columnCount;
       const currentRowCount = bodyRange.rowCount;
 
-      // ── STEP 1: Compact — preserve both values AND formulas ───
+      // ── STEP 1: Compact — preserve values AND formulas ───────
       const compactedValues   = [];
       const compactedFormulas = [];
 
@@ -787,7 +924,7 @@ async function confirmImport() {
         }
       }
 
-      // ── STEP 2: Build new rows ────────────────────────────────
+      // ── STEP 2: Build new rows from pending bonds ─────────────
       const newRows = [];
       for (const bond of pendingImportRows) {
         try {
@@ -797,7 +934,11 @@ async function confirmImport() {
           row[PT_AMT_CHARGED] = bond.amtCharged;
           row[PT_AMT_COLLECT] = bond.amtCollected;
           row[PT_EXPENSE]     = bond.expense;
+          row[PT_PCT_PAID]    = bond.pctPaidOnBond;   // auto-calculated
           row[PT_START_BAL]   = bond.startBalance;
+          row[PT_BAL_OWED]    = bond.balanceOwed;     // auto-calculated
+          // PT_AMT_PAYMENT (H), PT_END_BAL (I), PT_ENDING_BAL (K),
+          // PT_PAYMENT (L), PT_REACH (M) — left blank, formulas handle them
           newRows.push({ values: row });
           succeeded.push(bond);
         } catch (err) {
@@ -819,15 +960,13 @@ async function confirmImport() {
       freshBody.load("rowCount");
       await context.sync();
 
-      // ── STEP 4: Write compacted rows back preserving formulas ─
+      // ── STEP 4: Write compacted rows preserving formulas ─────
       for (let i = 0; i < compactedValues.length; i++) {
-        const rowRange = freshBody.getCell(i, 0).getResizedRange(0, colCount - 1);
-
-        // Write values first for non-formula cells
+        const rowRange = freshBody.getCell(i, 0)
+          .getResizedRange(0, colCount - 1);
         rowRange.values = [compactedValues[i]];
 
-        // Restore formulas — only write cells that actually had a formula
-        // (formula cells show the formula string starting with "=")
+        // Restore cells that had formulas
         const formulaRow = compactedFormulas[i];
         for (let col = 0; col < colCount; col++) {
           const formula = formulaRow[col];
@@ -837,37 +976,45 @@ async function confirmImport() {
         }
       }
 
-      // ── STEP 5: Write new rows and their formulas ─────────────
+      // ── STEP 5: Write new rows with structured formulas ───────
       const newRowStart = compactedValues.length;
       for (let i = 0; i < newRows.length; i++) {
-        const ri       = newRowStart + i;
-        const rowRange = freshBody.getCell(ri, 0).getResizedRange(0, colCount - 1);
-        rowRange.values = [newRows[i].values];
+        const ri = newRowStart + i;
+        freshBody.getCell(ri, 0)
+          .getResizedRange(0, colCount - 1)
+          .values = [newRows[i].values];
 
-        // Write structured reference formulas for new rows
-        freshBody.getCell(ri, PT_END_BAL).formulas    = [["=[@[START BALANCE]]-[@[AMT OF PAYMENT]]"]];
-        freshBody.getCell(ri, PT_ENDING_BAL).formulas = [["=[@[BALANCE OWED]]-[@[PAYMENT]]"]];
-        freshBody.getCell(ri, PT_PAYMENT).formulas    = [["=[@[AMT OF PAYMENT]]*[@[% PAID ON BOND]]"]];
+        freshBody.getCell(ri, PT_END_BAL).formulas    =
+          [["=[@[START BALANCE]]-[@[AMT OF PAYMENT]]"]];
+        freshBody.getCell(ri, PT_ENDING_BAL).formulas =
+          [["=[@[BALANCE OWED]]-[@[PAYMENT]]"]];
+        freshBody.getCell(ri, PT_PAYMENT).formulas    =
+          [["=[@[AMT OF PAYMENT]]*[@[% PAID ON BOND]]"]];
       }
 
-      // ── STEP 6: Clear leftover rows ───────────────────────────
+      // ── STEP 6: Clear leftover rows if table shrank ───────────
       if (freshBody.rowCount > neededRowCount) {
         freshBody.getCell(neededRowCount, 0)
-          .getResizedRange(freshBody.rowCount - neededRowCount - 1, colCount - 1)
+          .getResizedRange(
+            freshBody.rowCount - neededRowCount - 1,
+            colCount - 1
+          )
           .clear("Contents");
       }
 
       await context.sync();
     });
 
-    // Mark rows green in source file
+    // Mark processed rows green in source submission file
     if (succeeded.length && selectedFileId) {
       showLoading("Marking rows as processed...");
       const successExcelRows = submissionSourceRows
         .filter((_, i) => i < succeeded.length)
         .map(r => r.excelRow);
       const { sheetName } = await readSubmissionData(selectedFileId);
-      await markRowsProcessed(selectedFileId, sheetName, successExcelRows, null);
+      await markRowsProcessed(
+        selectedFileId, sheetName, successExcelRows, null
+      );
     }
 
     let message = `✔ Successfully imported ${succeeded.length} bond${succeeded.length !== 1 ? "s" : ""}.`;
@@ -877,8 +1024,8 @@ async function confirmImport() {
     }
 
     showSummary("import-summary", message, failed.length > 0 && !succeeded.length);
-    pendingImportRows = [];
-    document.getElementById("confirm-import-btn").disabled = false;
+    pendingImportRows    = [];
+    document.getElementById("confirm-import-btn").disabled          = false;
     submissionImportDone = true;
     document.getElementById("archive-submission-btn").style.display = "inline-block";
     document.getElementById("archive-submission-btn").disabled      = false;

@@ -160,11 +160,20 @@
                 <button id="preview-btn" style="display:none;">Preview Import</button>
                 <button id="archive-submission-btn" class="warning" style="display:none; margin-left:4px;">📦 Archive File</button>
 
-                <!-- Preview -->
+                <!-- Bond preview -->
                 <div id="preview-section" class="preview-area">
                     <hr/>
-                    <h3>📋 Preview — bonds to add to PaymentsTable</h3>
-                    <div id="preview-table-container"></div>
+
+                    <h3>📄 Submission Data — raw values from file</h3>
+                    <div id="preview-submission-table"></div>
+
+                    <h3 style="margin-top:14px;">📊 Calculated Values — what will be written to PAYMENTS</h3>
+                    <p style="font-size:11px;color:#555;margin:0 0 6px 0;">
+                        COMPANY COST, NET, % PAID ON BOND, and BALANCE OWED are auto-calculated.
+                        Rows showing ⚠ have a negative net — BALANCE OWED will be 0 until more is collected.
+                    </p>
+                    <div id="preview-payments-calc-table"></div>
+
                     <div id="import-summary" class="import-summary"></div>
                     <div style="margin-top:8px;">
                         <button class="success" id="confirm-import-btn">✔ Confirm Import</button>
