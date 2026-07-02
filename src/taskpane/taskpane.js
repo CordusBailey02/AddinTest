@@ -364,6 +364,68 @@ async function readSubmissionFileData(fileId) {
   console.log("Printing Data from submission sheet:")
   console.log(data)
 
+  // Get the spreedsheet data from the submission file
+  const rows = data.values
+  const rowHeaders = rows[2];
+  
+  return { rows, rowHeaders, sheetName }
+}
+
+async function extractBondData(rows) {
+  const dataRows = rows[3];
+
+  // Store read bonds from the rows
+  const bonds = [];
+
+  // Read out each row
+  dataRows.forEach((row, idx) => {
+    const rowNumberUsed = 3 + idx + 1;
+
+    const date                = row[0]
+    const jail                = row[1]
+    const last_name           = row[2]
+    const first_name          = row[3]
+    const ttl_bond_amount     = row[4]
+    const num_of_powers         = row[5]
+    const ttl_amt_charged     = row[6]
+    const ttl_amt_collected   = row[7]
+    const ttl_expense         = row[8]
+    const travel              = row[9]
+    const amt_in_env          = row[10]
+    const payment_type        = row[11]
+    const balance_owed        = row[12]
+    const administration      = row[13]
+
+    // Numerical conversions for number data
+    const ttl_bond_amount_NUMBER    = Number(ttl_bond_amount)  || 0;
+    const num_of_powers_NUMBER      = Number(num_of_powers)      || 0;
+    const ttl_amt_charged_NUMBER    = Number(ttl_amt_charged)  || 0;
+    const ttl_amt_collected_NUMBER  = Number(ttl_amt_collected)  || 0;
+    const ttl_expense_NUMBER        = Number(ttl_expense)  || 0;
+    const travel_NUMBER             = Number(travel)  || 0;
+    const amt_in_env_NUMBER         = Number(amt_in_env)  || 0;
+    const balance_owed_NUMBER       = Number(balance_owed)  || 0;
+
+    // MAP to payments table fields
+    bonds.push({
+      client:                       `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`,  
+      ttl_bond_COMPANY:             ttl_bond_amount_NUMBER,
+      amt_charged_COMPANY:          ttl_amt_charged_NUMBER,
+      amt_collected_COMPANY:        ttl_amt_collected_NUMBER,
+      expense_COMPANY:              ttl_expense_NUMBER,
+      percent_paid_on_bond_COMPANY, // Calculated value
+      start_balance_COMPANY:        ttl_amt_charged_NUMBER - ttl_amt_collected_NUMBER,
+      amt_of_payment_COMPANY,       // Comes from collected payments after
+      end_balance_COMPANY,          // FORMULA
+      balance_owed_BONDSMAN:        balance_owed_NUMBER,
+      ending_balance_BONDSMAN,      // FORMULA
+      payment_BONDSMAN,             // FORMULA
+    });
+  });
+
+  console.log("Printing Extracted Bonds Data:")
+  console.log(bonds)
+  return bonds
 }
 
 // ── READ SUBMISSION FILE ──────────────────────────────────────
@@ -818,7 +880,8 @@ async function previewImport() {
     }
 
     const { bonds, sourceRows } = await readSubmissionData(selectedFileId);
-    await readSubmissionFileData(selectedFileId);
+    const { test_rows, test_rowHeaders, test_sheetName } = await readSubmissionFileData(selectedFileId);
+    const test_bonds = await extractBondData(test_rows);
 
     if (!bonds.length) {
       hideLoading();
