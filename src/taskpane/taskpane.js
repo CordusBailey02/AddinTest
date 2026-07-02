@@ -355,6 +355,17 @@ async function getEmployeeInitials() {
   });
 }
 
+async function readSubmissionFileData(fileId) {
+  const sheetName = await resolveSheetName(fileId, SUBMISSION_SHEET_NAME);
+  const data      = await graphFetch(
+    `items/${fileId}/workbook/worksheets('${encodeURIComponent(sheetName)}')/usedRange`
+  );
+
+  console.log("Printing Data from submission sheet:")
+  console.log(data)
+
+}
+
 // ── READ SUBMISSION FILE ──────────────────────────────────────
 async function readSubmissionData(fileId) {
   const sheetName = await resolveSheetName(fileId, SUBMISSION_SHEET_NAME);
@@ -807,6 +818,7 @@ async function previewImport() {
     }
 
     const { bonds, sourceRows } = await readSubmissionData(selectedFileId);
+    await readSubmissionFileData(selectedFileId);
 
     if (!bonds.length) {
       hideLoading();
