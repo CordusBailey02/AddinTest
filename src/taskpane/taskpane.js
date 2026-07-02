@@ -1,5 +1,11 @@
 /* global console, document, Office, Excel */
 
+// Switch this when developing locally vs deploying
+const IS_LOCAL    = true; // ← set to false before npm run build
+const BASE_URL    = IS_LOCAL
+  ? "https://localhost:3000"
+  : "https://cordusbailey02.github.io/AddinTest";
+
 // ── CONFIG ────────────────────────────────────────────────────
 const START_FOLDER_PATH          = "BailBonds/EmployeeSubmissions";
 const START_FOLDER_PATH_PAYMENTS = "BailBonds/Payments";
@@ -98,7 +104,7 @@ function signIn() {
 
 function openAuthDialog(onSuccess) {
   Office.context.ui.displayDialogAsync(
-    "https://cordusbailey02.github.io/AddinTest/dialog.html",
+    `${BASE_URL}/dialog.html`,
     { height: 60, width: 30, promptBeforeOpen: false },
     (result) => {
       if (result.status === Office.AsyncResultStatus.Failed) {
