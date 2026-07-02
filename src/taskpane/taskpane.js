@@ -368,8 +368,6 @@ async function readSubmissionFileData(fileId) {
   const rows = data.values
   const rowHeaders = rows[2];
   
-  console.log("Printing values property from the data:")
-  console.log(rows)
   return { test_rows: rows, test_rowHeaders: rowHeaders, test_sheetName: sheetName }
 }
 
@@ -885,6 +883,8 @@ async function previewImport() {
 
     const { bonds, sourceRows } = await readSubmissionData(selectedFileId);
     const { test_rows, test_rowHeaders, test_sheetName } = await readSubmissionFileData(selectedFileId);
+    console.log("Test rows variable returned from readSubmissionFileData")
+    console.log(test_rows)
     const { test_bonds } = await extractBondData(test_rows);
 
     if (!bonds.length) {
