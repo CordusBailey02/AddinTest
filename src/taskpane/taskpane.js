@@ -372,7 +372,7 @@ async function readSubmissionFileData(fileId) {
 }
 
 async function extractBondData(rows) {
-  const dataRows = rows[3];
+  const dataRows = rows.slice(3);
 
   // Store read bonds from the rows
   const bonds = [];
