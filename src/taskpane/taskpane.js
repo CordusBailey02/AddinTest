@@ -368,6 +368,8 @@ async function readSubmissionFileData(fileId) {
   const rows = data.values
   const rowHeaders = rows[2];
   
+  console.log("Printing values property from the data:")
+  console.log(rows)
   return { rows, rowHeaders, sheetName }
 }
 
