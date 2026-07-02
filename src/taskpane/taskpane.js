@@ -369,112 +369,116 @@ async function readSubmissionData(fileId) {
   const sourceRows = [];
 
   dataRows.forEach((row, idx) => {
-    // ── All raw submission columns ────────────────────────────
-    const date           = row[0];   // Col A - DATE
-    const jail           = row[1];   // Col B - JAIL
-    const lastName       = row[2];   // Col C - LAST NAME
-    const firstName      = row[3];   // Col D - FIRST NAME
-    const ttlBond        = row[4];   // Col E - TTL BOND AMOUNT
-    const bondNum        = row[5];   // Col F - #
-    const amtChgd        = row[6];   // Col G - TOTAL AMT CHGD
-    const amtCol         = row[7];   // Col H - TOTAL AMT COL
-    const expense        = row[8];   // Col I - TTL EXPENSE
-    const travel         = row[9];   // Col J - TRAVEL
-    const amtInEnv       = row[10];  // Col K - AMT IN ENV
-    const pymtType       = row[11];  // Col L - PYMT TYPE
-    const balanceOwedRaw = row[12];  // Col M - BALANCE OWED
-    const administration = row[13];  // Col N - ADMINISTRATION
+    const date           = row[0];
+    const jail           = row[1];
+    const lastName       = row[2];
+    const firstName      = row[3];
+    const ttlBond        = row[4];
+    const bondNum        = row[5];
+    const amtChgd        = row[6];
+    const amtCol         = row[7];
+    const expense        = row[8];
+    const travel         = row[9];
+    const amtInEnv       = row[10];
+    const pymtType       = row[11];
+    const balanceOwedSub = row[12]; // Col M — employee's total owed from submission
+    const administration = row[13];
 
-    // Skip empty rows and totals row
     if (!lastName || !ttlBond) return;
     if (String(lastName).toUpperCase().includes("TOTAL")) return;
 
     const excelRow = SUBMISSION_DATA_START + idx + 1;
 
     // ── Numeric conversions ───────────────────────────────────
-    const ttlBondNum   = Number(ttlBond) || 0;
-    const amtChgdNum   = Number(amtChgd) || 0;
-    const amtColNum    = Number(amtCol)  || 0;
-    const expenseNum   = Number(expense) || 0;
-    const travelNum    = Number(travel)  || 0;
+    const ttlBondNum      = Number(ttlBond)        || 0;
+    const amtChgdNum      = Number(amtChgd)        || 0;
+    const amtColNum       = Number(amtCol)         || 0;
+    const expenseNum      = Number(expense)        || 0;
+    const travelNum       = Number(travel)         || 0;
+    const balanceOwedNum  = Number(balanceOwedSub) || 0; // col M
 
-    // ── COMPANY COST: Total cost company has incurred ─────────
-    // COMPANY_COST = (TTL BOND × 2.7%) + TTL EXPENSE + TRAVEL
+    // ── Step 1: COMPANY COST ──────────────────────────────────
+    // (TTL BOND × 2.7%) + TTL EXPENSE + TRAVEL
     const companyCost = (ttlBondNum * 0.027) + expenseNum + travelNum;
 
-    // ── NET: Amount collected minus company cost ──────────────
+    // ── Step 2: NET ───────────────────────────────────────────
+    // TTL AMOUNT COLLECTED - COMPANY COST
     const net = amtColNum - companyCost;
+
+    // ── Step 3: DOWN PAYMENT & EMPLOYEE OWED BALANCE ─────────
+    let initialPayment      = 0;
+    let employeeOwedBalance = 0;
+    let netIsNegative       = false;
+
+    if (net < 0) {
+      // Negative — subtract deficit from employee's BALANCE OWED (col M)
+      netIsNegative       = true;
+      employeeOwedBalance = Math.max(0, balanceOwedNum - Math.abs(net));
+    } else {
+      // Positive — calculate down payment
+      // DOWN PAYMENT = NET × 25%, minimum $25
+      const rawDownPayment = net * 0.25;
+      initialPayment       = rawDownPayment < 25 ? 25 : rawDownPayment;
+
+      // Subtract down payment from employee's BALANCE OWED (col M)
+      employeeOwedBalance = Math.max(0, balanceOwedNum - initialPayment);
+    }
+
+    // ── Step 4: % PAID ON BOND ────────────────────────────────
+    // EMPLOYEE OWED BALANCE ÷ COMPANY COST
+    const pctPaidOnBond = companyCost > 0
+      ? parseFloat((employeeOwedBalance / companyCost).toFixed(4))
+      : 0;
 
     // ── START BALANCE: What client still owes company ─────────
     const startBalance = amtChgdNum - amtColNum;
 
-    // ── BALANCE OWED & % PAID ON BOND ─────────────────────────
-    let balanceOwed    = 0;
-    let pctPaidOnBond  = 0;
-    let initialPayment = 0;
-    let netIsNegative  = false;
-
-    if (net < 0) {
-      netIsNegative  = true;
-      balanceOwed    = 0;
-      pctPaidOnBond  = 0;
-      initialPayment = 0;
-    } else {
-      const rawDownPayment = net * 0.25;
-      initialPayment       = rawDownPayment < 25 ? 25 : rawDownPayment;
-      balanceOwed          = Math.max(0, net - initialPayment);
-      pctPaidOnBond        = startBalance > 0
-        ? parseFloat((balanceOwed / startBalance).toFixed(4))
-        : 0;
-    }
-
     // Format date for display
     let displayDate = "";
-    if (date instanceof Date || (typeof date === "string" && date)) {
-      displayDate = date instanceof Date
-        ? date.toLocaleDateString()
-        : String(date);
+    if (date instanceof Date) {
+      displayDate = date.toLocaleDateString();
     } else if (typeof date === "number") {
-      // Excel serial date number
-      const jsDate = new Date((date - 25569) * 86400 * 1000);
-      displayDate  = jsDate.toLocaleDateString();
+      displayDate = new Date((date - 25569) * 86400 * 1000).toLocaleDateString();
+    } else if (date) {
+      displayDate = String(date);
     }
 
     bonds.push({
-      // ── Every raw column from submission ──────────────────
+      // Raw submission fields
       rawDate:        displayDate,
-      rawJail:        jail         ?? "",
+      rawJail:        jail           ?? "",
       lastName:       String(lastName).toUpperCase(),
       firstName:      String(firstName).toUpperCase(),
       rawTtlBond:     ttlBondNum,
-      rawBondNum:     bondNum      ?? "",
+      rawBondNum:     bondNum        ?? "",
       rawAmtChgd:     amtChgdNum,
       rawAmtCol:      amtColNum,
       rawExpense:     expenseNum,
       rawTravel:      travelNum,
-      rawAmtInEnv:    amtInEnv     ?? "",
-      rawPymtType:    pymtType     ?? "",
-      rawBalanceOwed: balanceOwedRaw ?? "",
+      rawAmtInEnv:    amtInEnv       ?? "",
+      rawPymtType:    pymtType       ?? "",
+      rawBalanceOwed: balanceOwedNum,
       rawAdmin:       administration ?? "",
 
-      // ── Derived/combined fields ───────────────────────────
-      client:         `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`,
-      ttlBond:        ttlBondNum,
-      amtCharged:     amtChgdNum,
-      amtCollected:   amtColNum,
-      expense:        expenseNum,
-      travel:         travelNum,
+      // Derived fields
+      client:              `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`,
+      ttlBond:             ttlBondNum,
+      amtCharged:          amtChgdNum,
+      amtCollected:        amtColNum,
+      expense:             expenseNum,
+      travel:              travelNum,
 
-      // ── Calculated PAYMENTS fields ────────────────────────
+      // Calculated PAYMENTS fields
       companyCost,
       net,
-      startBalance,
-      balanceOwed,
-      pctPaidOnBond,
-      initialPayment,
       netIsNegative,
+      initialPayment,
+      employeeOwedBalance,
+      startBalance,
+      balanceOwed:    balanceOwedNum, // col M from submission → BALANCE OWED in PAYMENTS
+      pctPaidOnBond,
 
-      // ── Source tracking ───────────────────────────────────
+      // Source tracking
       sourceRowIndex: idx,
       excelRow,
     });
