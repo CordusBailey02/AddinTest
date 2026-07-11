@@ -164,19 +164,30 @@
                 <div id="preview-section" class="preview-area">
                     <hr/>
 
-                    <h3>📄 Submission Data — raw values from file</h3>
+                    <h3>📄 Submission Data — all bonds from file</h3>
                     <div id="preview-submission-table"></div>
 
-                    <h3 style="margin-top:14px;">📊 Calculated Values — what will be written to PAYMENTS</h3>
-                    <p style="font-size:11px;color:#555;margin:0 0 6px 0;">
-                        COMPANY COST, NET, % PAID ON BOND, and BALANCE OWED are auto-calculated.
-                        Rows showing ⚠ have a negative net — BALANCE OWED will be 0 until more is collected.
-                    </p>
-                    <div id="preview-payments-calc-table"></div>
+                    <div id="fullpay-section" style="display:none; margin-top:14px;">
+                        <h3>✅ Full Pay Bonds — go to TIMESHEET commissions</h3>
+                        <p style="font-size:11px;color:#555;margin:0 0 6px 0;">
+                            These bonds are under $5,000 or fully paid. Commission is paid immediately
+                            and noted in the ADMINISTRATION column. They are NOT added to PAYMENTS.
+                        </p>
+                        <div id="preview-fullpay-table"></div>
+                    </div>
+
+                    <div id="payment-plan-section" style="display:none; margin-top:14px;">
+                        <h3>📋 Payment Plan Bonds — will be added to PaymentsTable</h3>
+                        <p style="font-size:11px;color:#555;margin:0 0 6px 0;">
+                            These bonds are $5,000+ and not fully paid.
+                            REACH shows the amount the client must pay before the employee earns commission.
+                        </p>
+                        <div id="preview-payments-calc-table"></div>
+                    </div>
 
                     <div id="import-summary" class="import-summary"></div>
                     <div style="margin-top:8px;">
-                        <button class="success" id="confirm-import-btn">✔ Confirm Import</button>
+                        <button class="success" id="confirm-import-btn">✔ Import Payment Plan Bonds</button>
                         <button class="secondary" id="cancel-import-btn">Cancel</button>
                     </div>
                 </div>

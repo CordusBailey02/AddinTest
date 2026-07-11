@@ -1,3 +1,159 @@
+// ── BOND CALCULATION ──────────────────────────────────────────
+// PLACEHOLDER — will be read from TIMESHEET config section once restructured
+const EMPLOYEE_COMMISSION_RATE = 0.02; // 2% for Edwin — update per employee
+
+// Commission caps — rate maps to maximum dollar amount
+const COMMISSION_CAPS = [
+  { rate: 0.025, cap: 500 },
+  { rate: 0.02,  cap: 400 },
+  { rate: 0.015, cap: 300 },
+  { rate: 0.01,  cap: 200 },
+  { rate: 0.005, cap: 100 },
+];
+const COMMISSION_CAP_CONSTANT = 20000
+
+const PAYMENT_PLAN_THRESHOLD = 5000; // bonds >= this go to payment plan
+const MIN_COMMISSION         = 25;   // minimum commission payment
+const FIRST_POWER_COST       = 25;   // cost of first power
+const ADDITIONAL_POWER_COST  = 5;    // cost of each additional power
+
+// ── BOND CALCULATION FUNCTIONS ────────────────────────────────
+
+/**
+ * Get the commission cap for a given rate.
+ * Returns the cap dollar amount, or Infinity if rate not found.
+ */
+function getCommissionCap(rate) {
+
+  return COMMISSION_CAP_CONSTANT * rate
+
+  //const tier = COMMISSION_CAPS.find(t => t.rate === rate);
+  //return tier ? tier.cap : Infinity;
+}
+
+/**
+ * Calculate the capped commission amount for a bond.
+ * commission = MIN(ttlBond × rate, cap)
+ */
+function calcCappedCommission(ttlBond, rate) {
+  const cap    = getCommissionCap(rate);
+  const raw    = ttlBond * rate;
+  return Math.min(raw, cap);
+}
+
+/**
+ * Calculate the power cost based on number of powers.
+ * # = 1 → $25
+ * # = 2 → $30
+ * # = 3 → $35
+ * Formula: 25 + (# - 1) × 5
+ */
+function calcPowerCost(numPowers) {
+  const n = Number(numPowers) || 1;
+  return FIRST_POWER_COST + (n - 1) * ADDITIONAL_POWER_COST;
+}
+
+/**
+ * Determine if a bond goes to full pay (Path 1) or payment plan (Path 2).
+ * Path 1: TTL BOND < 5000 OR fully paid (AMT CHARGED === AMT COLLECTED)
+ * Path 2: TTL BOND >= 5000 AND not fully paid
+ */
+function getBondPath(ttlBond, amtCharged, amtCollected) {
+  const fullyPaid = amtCharged > 0 && amtCharged === amtCollected;
+  if (ttlBond < PAYMENT_PLAN_THRESHOLD || fullyPaid) return "full_pay";
+  return "payment_plan";
+}
+
+/**
+ * Calculate full pay commission for Path 1 bonds.
+ * commission = MAX(TTL BOND × rate (capped), $25)
+ */
+function calcFullPayCommission(ttlBond, rate) {
+  const commission = calcCappedCommission(ttlBond, rate);
+  return Math.max(commission, MIN_COMMISSION);
+}
+
+/**
+ * Calculate % PAID ON BOND and REACH for Path 2 bonds (payment plan).
+ *
+ * VAR1 = (TTL BOND × 0.027) + TTL EXPENSE + TRAVEL
+ * VAR2 = TTL AMT COLLECTED - VAR1
+ *
+ * If VAR2 < 0 (negative):
+ *   VAR3  = BALANCE OWED - abs(VAR2)          ← REACH column
+ *   VAR00 = cappedCommission - powerCost
+ *   % PAID ON BOND = VAR00 / VAR3
+ *
+ * If VAR2 >= 0 (positive):
+ *   VAR99 = VAR2 × 0.25, min $25              ← down payment
+ *   VAR00 = cappedCommission - VAR99
+ *   % PAID ON BOND = VAR00 / BALANCE OWED
+ */
+function calcPaymentPlanBond(ttlBond, ttlExpense, travel, amtCollected, balanceOwed, numPowers, rate) {
+  // VAR1: Company cost
+  const var1 = (ttlBond * 0.027) + ttlExpense + travel;
+
+  // VAR2: Net position
+  const var2 = amtCollected - var1;
+
+  // Capped commission for this bond
+  const cappedCommission = calcCappedCommission(ttlBond, rate);
+
+  // Power cost: $25 for first, $5 for each additional
+  const powerCost = calcPowerCost(numPowers);
+
+  let reach          = 0;
+  let downPayment    = 0;
+  let var00          = 0;
+  let pctPaidOnBond  = 0;
+  let var2IsNegative = false;
+
+  if (var2 < 0) {
+    var2IsNegative = true;
+
+    // VAR3: What client still needs to pay before employee earns commission
+    // This is the REACH column value
+    const var3 = Math.max(0, balanceOwed - Math.abs(var2));
+    reach       = var3;
+
+    // VAR00: Employee owed after power costs
+    var00 = cappedCommission - powerCost;
+
+    // % PAID ON BOND = VAR00 / VAR3
+    pctPaidOnBond = var3 > 0
+      ? parseFloat((var00 / var3).toFixed(4))
+      : 0;
+
+  } else {
+    // VAR99: Down payment = VAR2 × 25%, minimum $25
+    const var99  = var2 * 0.25;
+    downPayment  = var99 < MIN_COMMISSION ? MIN_COMMISSION : var99;
+
+    // VAR00: Employee owed after down payment
+    var00 = cappedCommission - downPayment;
+
+    // % PAID ON BOND = VAR00 / BALANCE OWED
+    pctPaidOnBond = balanceOwed > 0
+      ? parseFloat((var00 / balanceOwed).toFixed(4))
+      : 0;
+
+    // REACH is 0 for positive VAR2 — client has already broken even
+    reach = 0;
+  }
+
+  return {
+    var1,
+    var2,
+    var2IsNegative,
+    cappedCommission,
+    powerCost,
+    downPayment,
+    var00,
+    reach,
+    pctPaidOnBond,
+  };
+}
+
 /* global console, document, Office, Excel */
 
 // Switch this when developing locally vs deploying
@@ -375,20 +531,20 @@ async function readSubmissionData(fileId) {
   const sourceRows = [];
 
   dataRows.forEach((row, idx) => {
-    const date           = row[0];
-    const jail           = row[1];
-    const lastName       = row[2];
-    const firstName      = row[3];
-    const ttlBond        = row[4];
-    const bondNum        = row[5];
-    const amtChgd        = row[6];
-    const amtCol         = row[7];
-    const expense        = row[8];
-    const travel         = row[9];
-    const amtInEnv       = row[10];
-    const pymtType       = row[11];
-    const balanceOwedSub = row[12]; // Col M — employee's total owed from submission
-    const administration = row[13];
+    const date           = row[0];   // Col A - DATE
+    const jail           = row[1];   // Col B - JAIL
+    const lastName       = row[2];   // Col C - LAST NAME
+    const firstName      = row[3];   // Col D - FIRST NAME
+    const ttlBond        = row[4];   // Col E - TTL BOND AMOUNT
+    const numPowers      = row[5];   // Col F - # (number of powers)
+    const amtChgd        = row[6];   // Col G - TOTAL AMT CHGD
+    const amtCol         = row[7];   // Col H - TOTAL AMT COL
+    const expense        = row[8];   // Col I - TTL EXPENSE
+    const travel         = row[9];   // Col J - TRAVEL
+    const amtInEnv       = row[10];  // Col K - AMT IN ENV
+    const pymtType       = row[11];  // Col L - PYMT TYPE
+    const balanceOwedSub = row[12];  // Col M - BALANCE OWED (employee total owed)
+    const administration = row[13];  // Col N - ADMINISTRATION
 
     if (!lastName || !ttlBond) return;
     if (String(lastName).toUpperCase().includes("TOTAL")) return;
@@ -397,47 +553,12 @@ async function readSubmissionData(fileId) {
 
     // ── Numeric conversions ───────────────────────────────────
     const ttlBondNum      = Number(ttlBond)        || 0;
+    const numPowersNum    = Number(numPowers)       || 1;
     const amtChgdNum      = Number(amtChgd)        || 0;
     const amtColNum       = Number(amtCol)         || 0;
     const expenseNum      = Number(expense)        || 0;
     const travelNum       = Number(travel)         || 0;
-    const balanceOwedNum  = Number(balanceOwedSub) || 0; // col M
-
-    // ── Step 1: COMPANY COST ──────────────────────────────────
-    // (TTL BOND × 2.7%) + TTL EXPENSE + TRAVEL
-    const companyCost = (ttlBondNum * 0.027) + expenseNum + travelNum;
-
-    // ── Step 2: NET ───────────────────────────────────────────
-    // TTL AMOUNT COLLECTED - COMPANY COST
-    const net = amtColNum - companyCost;
-
-    // ── Step 3: DOWN PAYMENT & EMPLOYEE OWED BALANCE ─────────
-    let initialPayment      = 0;
-    let employeeOwedBalance = 0;
-    let netIsNegative       = false;
-
-    if (net < 0) {
-      // Negative — subtract deficit from employee's BALANCE OWED (col M)
-      netIsNegative       = true;
-      employeeOwedBalance = Math.max(0, balanceOwedNum - Math.abs(net));
-    } else {
-      // Positive — calculate down payment
-      // DOWN PAYMENT = NET × 25%, minimum $25
-      const rawDownPayment = net * 0.25;
-      initialPayment       = rawDownPayment < 25 ? 25 : rawDownPayment;
-
-      // Subtract down payment from employee's BALANCE OWED (col M)
-      employeeOwedBalance = Math.max(0, balanceOwedNum - initialPayment);
-    }
-
-    // ── Step 4: % PAID ON BOND ────────────────────────────────
-    // EMPLOYEE OWED BALANCE ÷ COMPANY COST
-    const pctPaidOnBond = companyCost > 0
-      ? parseFloat((employeeOwedBalance / companyCost).toFixed(4))
-      : 0;
-
-    // ── START BALANCE: What client still owes company ─────────
-    const startBalance = amtChgdNum - amtColNum;
+    const balanceOwedNum  = Number(balanceOwedSub) || 0;
 
     // Format date for display
     let displayDate = "";
@@ -449,14 +570,18 @@ async function readSubmissionData(fileId) {
       displayDate = String(date);
     }
 
-    bonds.push({
+    // ── Determine bond path ───────────────────────────────────
+    const bondPath     = getBondPath(ttlBondNum, amtChgdNum, amtColNum);
+    const startBalance = amtChgdNum - amtColNum;
+
+    let bondRecord = {
       // Raw submission fields
       rawDate:        displayDate,
       rawJail:        jail           ?? "",
       lastName:       String(lastName).toUpperCase(),
       firstName:      String(firstName).toUpperCase(),
       rawTtlBond:     ttlBondNum,
-      rawBondNum:     bondNum        ?? "",
+      rawNumPowers:   numPowersNum,
       rawAmtChgd:     amtChgdNum,
       rawAmtCol:      amtColNum,
       rawExpense:     expenseNum,
@@ -466,29 +591,53 @@ async function readSubmissionData(fileId) {
       rawBalanceOwed: balanceOwedNum,
       rawAdmin:       administration ?? "",
 
-      // Derived fields
-      client:              `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`,
-      ttlBond:             ttlBondNum,
-      amtCharged:          amtChgdNum,
-      amtCollected:        amtColNum,
-      expense:             expenseNum,
-      travel:              travelNum,
-
-      // Calculated PAYMENTS fields
-      companyCost,
-      net,
-      netIsNegative,
-      initialPayment,
-      employeeOwedBalance,
+      // Derived
+      client:       `${String(lastName).toUpperCase()}, ${String(firstName).toUpperCase()}`,
+      ttlBond:      ttlBondNum,
+      amtCharged:   amtChgdNum,
+      amtCollected: amtColNum,
+      expense:      expenseNum,
+      travel:       travelNum,
       startBalance,
-      balanceOwed:    balanceOwedNum, // col M from submission → BALANCE OWED in PAYMENTS
-      pctPaidOnBond,
+      balanceOwed:  balanceOwedNum,
+
+      // Path determines where this bond goes
+      bondPath, // "full_pay" | "payment_plan"
 
       // Source tracking
       sourceRowIndex: idx,
       excelRow,
-    });
+    };
 
+    if (bondPath === "full_pay") {
+      // ── Path 1: Full pay — goes to TIMESHEET, not PAYMENTS ──
+      const fullPayAmount = calcFullPayCommission(ttlBondNum, EMPLOYEE_COMMISSION_RATE);
+      bondRecord = {
+        ...bondRecord,
+        fullPayAmount,
+        // No payment plan fields needed
+        pctPaidOnBond:  null,
+        reach:          null,
+        var2IsNegative: null,
+      };
+    } else {
+      // ── Path 2: Payment plan — goes into PAYMENTS sheet ──────
+      const calc = calcPaymentPlanBond(
+        ttlBondNum,
+        expenseNum,
+        travelNum,
+        amtColNum,
+        balanceOwedNum,
+        numPowersNum,
+        EMPLOYEE_COMMISSION_RATE
+      );
+      bondRecord = {
+        ...bondRecord,
+        ...calc,
+      };
+    }
+
+    bonds.push(bondRecord);
     sourceRows.push({ rowIndex: idx, excelRow });
   });
 
@@ -820,11 +969,15 @@ async function previewImport() {
       return;
     }
 
-    pendingImportRows    = bonds;
-    submissionSourceRows = sourceRows;
+    // Separate bonds by path
+    const paymentPlanBonds = bonds.filter(b => b.bondPath === "payment_plan");
+    const fullPayBonds     = bonds.filter(b => b.bondPath === "full_pay");
 
-    // ── Section 1: ALL raw submission columns ─────────────────
-    // Show every column exactly as submitted — nothing omitted
+    // Only payment plan bonds go into pendingImportRows
+    pendingImportRows    = paymentPlanBonds;
+    submissionSourceRows = sourceRows.filter((_, i) => bonds[i]?.bondPath === "payment_plan");
+
+    // ── Section 1: Raw submission data (all bonds) ────────────
     const submissionHeaders = [
       "DATE", "JAIL", "LAST NAME", "FIRST NAME",
       "TTL BOND", "#", "AMT CHGD", "AMT COL",
@@ -837,7 +990,7 @@ async function previewImport() {
       b.lastName,
       b.firstName,
       `$${b.rawTtlBond.toLocaleString()}`,
-      b.rawBondNum,
+      b.rawNumPowers,
       `$${b.rawAmtChgd.toLocaleString()}`,
       `$${b.rawAmtCol.toLocaleString()}`,
       `$${b.rawExpense.toLocaleString()}`,
@@ -847,46 +1000,55 @@ async function previewImport() {
       b.rawBalanceOwed !== "" ? `$${Number(b.rawBalanceOwed).toLocaleString()}` : "—",
       b.rawAdmin     || "—",
     ]);
-    buildPreviewTable(
-      "preview-submission-table",
-      submissionHeaders,
-      submissionRows
-    );
+    buildPreviewTable("preview-submission-table", submissionHeaders, submissionRows);
 
-    // ── Section 2: Calculated values going into PAYMENTS ─────
-    const paymentsHeaders = [
-      "CLIENT", "COMPANY COST", "NET",
-      "START BALANCE", "BALANCE OWED",
-      "% PAID ON BOND", "INITIAL PAYMENT", "NOTE",
-    ];
-    const paymentsRows = bonds.map(b => [
-      b.client,
-      `$${b.companyCost.toFixed(2)}`,
-      b.netIsNegative
-        ? `($${Math.abs(b.net).toFixed(2)})`
-        : `$${b.net.toFixed(2)}`,
-      `$${b.startBalance.toLocaleString()}`,
-      b.netIsNegative ? "TBD"                    : `$${b.balanceOwed.toFixed(2)}`,
-      b.netIsNegative ? "TBD"                    : `${(b.pctPaidOnBond * 100).toFixed(2)}%`,
-      b.netIsNegative ? "—"                      : `$${b.initialPayment.toFixed(2)}`,
-      b.netIsNegative
-        ? "⚠ Net negative — BALANCE OWED set to 0"
-        : b.initialPayment === 25
-          ? "Min. $25 applied"
-          : "",
-    ]);
-    buildPreviewTable(
-      "preview-payments-calc-table",
-      paymentsHeaders,
-      paymentsRows
-    );
+    // ── Section 2: Full pay bonds (Path 1) ───────────────────
+    if (fullPayBonds.length) {
+      const fullPayHeaders = ["CLIENT", "TTL BOND", "COMMISSION", "NOTE"];
+      const fullPayRows    = fullPayBonds.map(b => [
+        b.client,
+        `$${b.ttlBond.toLocaleString()}`,
+        `$${b.fullPayAmount.toFixed(2)}`,
+        b.ttlBond < PAYMENT_PLAN_THRESHOLD
+          ? "Under $5,000 — paid in full"
+          : "Fully paid — paid in full",
+      ]);
+      buildPreviewTable("preview-fullpay-table", fullPayHeaders, fullPayRows);
+      document.getElementById("fullpay-section").style.display = "block";
+    } else {
+      document.getElementById("fullpay-section").style.display = "none";
+    }
+
+    // ── Section 3: Payment plan bonds (Path 2) ───────────────
+    if (paymentPlanBonds.length) {
+      const paymentsHeaders = [
+        "CLIENT", "START BALANCE", "BALANCE OWED",
+        "% PAID ON BOND", "REACH", "NOTE",
+      ];
+      const paymentsRows = paymentPlanBonds.map(b => [
+        b.client,
+        `$${b.startBalance.toLocaleString()}`,
+        `$${b.balanceOwed.toFixed(2)}`,
+        `${(b.pctPaidOnBond * 100).toFixed(2)}%`,
+        b.reach > 0 ? `$${b.reach.toFixed(2)}` : "—",
+        b.var2IsNegative
+          ? "⚠ VAR2 negative — client hasn't covered company cost yet"
+          : `Down payment: $${b.downPayment.toFixed(2)}`,
+      ]);
+      buildPreviewTable("preview-payments-calc-table", paymentsHeaders, paymentsRows);
+      document.getElementById("payment-plan-section").style.display = "block";
+    } else {
+      document.getElementById("payment-plan-section").style.display = "none";
+    }
 
     document.getElementById("import-summary").style.display  = "none";
     document.getElementById("preview-section").style.display = "block";
-    document.getElementById("confirm-import-btn").disabled   = false;
+    document.getElementById("confirm-import-btn").disabled   = !paymentPlanBonds.length;
+
     hideLoading();
     setStatus(
-      `${bonds.length} bond${bonds.length > 1 ? "s" : ""} ready to import.`
+      `${bonds.length} bond${bonds.length > 1 ? "s" : ""} read — ` +
+      `${paymentPlanBonds.length} payment plan, ${fullPayBonds.length} full pay.`
     );
 
   } catch (error) {
