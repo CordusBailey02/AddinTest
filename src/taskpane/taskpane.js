@@ -2,14 +2,6 @@
 // PLACEHOLDER — will be read from TIMESHEET config section once restructured
 const EMPLOYEE_COMMISSION_RATE = 0.02; // 2% for Edwin — update per employee
 
-// Commission caps — rate maps to maximum dollar amount
-const COMMISSION_CAPS = [
-  { rate: 0.025, cap: 500 },
-  { rate: 0.02,  cap: 400 },
-  { rate: 0.015, cap: 300 },
-  { rate: 0.01,  cap: 200 },
-  { rate: 0.005, cap: 100 },
-];
 const COMMISSION_CAP_CONSTANT = 20000
 
 const PAYMENT_PLAN_THRESHOLD = 5000; // bonds >= this go to payment plan
@@ -24,11 +16,7 @@ const ADDITIONAL_POWER_COST  = 5;    // cost of each additional power
  * Returns the cap dollar amount, or Infinity if rate not found.
  */
 function getCommissionCap(rate) {
-
   return COMMISSION_CAP_CONSTANT * rate
-
-  //const tier = COMMISSION_CAPS.find(t => t.rate === rate);
-  //return tier ? tier.cap : Infinity;
 }
 
 /**
