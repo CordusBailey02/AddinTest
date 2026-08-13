@@ -1,10 +1,5 @@
 import { PublicClientApplication } from "@azure/msal-browser";
-
-// Switch this when developing locally vs deploying
-const IS_LOCAL    = true; // ← set to false before npm run build
-const BASE_URL    = IS_LOCAL
-  ? "https://localhost:3000"
-  : "https://cordusbailey02.github.io/AddinTest";
+import { BASE_URL } from "./authentication";
 
 const msalConfig = {
   auth: {
