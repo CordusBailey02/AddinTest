@@ -442,5 +442,6 @@ export {
     PT_END_BAL,
     PT_BAL_OWED,
     PT_ENDING_BAL,
-    PT_PAYMENT
+    PT_PAYMENT,
+    PT_CLIENT
 };

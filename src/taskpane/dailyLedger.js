@@ -4,7 +4,8 @@ import {
   PT_ENDING_BAL,
   PT_END_BAL,
   PT_BAL_OWED,
-  PT_START_BAL
+  PT_START_BAL,
+  PT_CLIENT
 } from "./employeeSubmission";
 
 import { appState } from "./appState";
@@ -29,6 +30,7 @@ const LEDGER_DATA_START      = 2; // row 3 in Excel (0-indexed)
 const LEDGER_CLIENT_COL   = 0;
 const LEDGER_AMOUNT_COL   = 1;
 const LEDGER_BONDSMAN_COL = 5;
+const LEDGER_BALANCE_COL  = 6;
 
 async function resolveSheetName(fileId, preferredName) {
   // Try preferred name first, fall back to first sheet
@@ -46,55 +48,84 @@ async function resolveSheetName(fileId, preferredName) {
   }
 }
 
+async function runPreflightChecks() {
+  return await Excel.run(async (context) => {
+    const errors = [];
+
+    const sheets = context.workbook.worksheets;
+    sheets.load("items/name");
+    await context.sync();
+
+    const sheetNames = sheets.items.map(s => s.name);
+
+    if (!sheetNames.includes("DailyLedger")) {
+      errors.push("DailyLedger sheet not found. Please rename the sheet to 'DailyLedger'.");
+    }
+
+    if (sheetNames.includes("DailyLedger")) {
+      const sheet    = context.workbook.worksheets.getItem("DailyLedger");
+      const nameCell = sheet.getRange("A1");
+      nameCell.load("values");
+      await context.sync();
+      if (!nameCell.values[0][0]) {
+        errors.push("Cell A1 on DailyLedger sheet is empty. Check that the proper date is set.");
+      }
+    }
+
+    return errors;
+  });
+}
+
 
 async function readSecretaryPayments(fileId, employeeInitials) {
-  const sheetName = await resolveSheetName(fileId, SUBMISSION_SHEET_NAME);
+  //const sheetName = await resolveSheetName(fileId, SUBMISSION_SHEET_NAME);
   const data      = await graphFetch(
-    `items/${fileId}/workbook/worksheets('${encodeURIComponent(sheetName)}')/usedRange`, appState.dailyLedgersId
+    `items/${fileId}/workbook/worksheets('${encodeURIComponent('DailyLedger')}')/usedRange`, appState.dailyLedgersId
   );
   const rows      = data.values;
-  const headerRow = rows[LEDGER_HEADER_ROW] || [];
   const dataRows  = rows.slice(LEDGER_DATA_START);
 
   const matched    = [];
-  const sourceRows = [];
 
   dataRows.forEach((row, idx) => {
     const client   = String(row[LEDGER_CLIENT_COL]   ?? "").trim();
     const amount   = row[LEDGER_AMOUNT_COL];
     const bondsman = String(row[LEDGER_BONDSMAN_COL] ?? "").trim().toUpperCase();
+    const balance  = row[LEDGER_BALANCE_COL];
 
     if (!client) return;
     if (amount === null || amount === "" || amount === undefined) return;
     if (bondsman !== employeeInitials.toUpperCase()) return;
+    if (balance === null || balance === "" || balance === undefined) return;
 
     const excelRow = LEDGER_DATA_START + idx + 1; // 1-based
 
     matched.push({
       client:   client.toUpperCase(),
       amount:   Number(amount) || 0,
+      balance,
       bondsman,
       excelRow,
     });
 
-    sourceRows.push({ rowIndex: idx, excelRow });
   });
 
-  return { matched, headerRow, sourceRows, sheetName };
+  return { matched };
 }
 
 async function previewPaymentsImport() {
-  if (!appState.selectedPaymentsFileId) {
-    setPaymentsStatus("Please select a daily ledger file first.");
+  if(!appState.selectedPaymentsFileId) {
+    setPaymentsStatus("Please select a daily ledger file first.")
     return;
   }
 
-  showLoading("Reading daily ledger...");
+  showLoading("Reading daily ledger...")
   document.getElementById("preview-payments-section").style.display = "none";
 
   try {
+
     //const errors = await runPreflightChecks();
-    //if (errors.length) {
+    //if(errors.length) {
     //  hideLoading();
     //  showNotification("⚠ Setup issues:\n• " + errors.join("\n• "), "error");
     //  return;
@@ -104,17 +135,15 @@ async function previewPaymentsImport() {
     document.getElementById("detected-employee").textContent = `${fullName} (${initials})`;
     document.getElementById("employee-badge").style.display  = "block";
 
-    const { matched, sourceRows, sheetName } = await readSecretaryPayments(
-      appState.selectedPaymentsFileId, initials
-    );
+    // Get rows that macth employee initials
+    const { matched } = await readSecretaryPayments(appState.selectedPaymentsFileId, initials);
 
+    // No bond payments for employee found
     if (!matched.length) {
       hideLoading();
       setPaymentsStatus(`No payments found for bondsman "${initials}" in this file.`);
       return;
     }
-
-    appState.ledgerSourceRows = sourceRows;
 
     // Load PaymentsTable for cross-referencing
     const tableRows = await Excel.run(async (context) => {
@@ -125,6 +154,7 @@ async function previewPaymentsImport() {
       return bodyRange.values;
     });
 
+    // Get the necessary row data of the table from open workbook
     const tableClients = tableRows.map((row, idx) => ({
       rowIndex:     idx,
       client:       String(row[PT_CLIENT]    || "").toUpperCase().trim(),
@@ -134,11 +164,48 @@ async function previewPaymentsImport() {
     const previews  = [];
     const unmatched = [];
 
+    // TESTING; NEED TO FILTER OUT EMPTY ROWS
+    //for (const t of tableClients) {
+    //  console.log("Table clients:")
+    //  console.log(t)
+    //}
+
+    const duplicateTracker = {};
+
+    // Find matches in open workbook
     for (const payment of matched) {
+      console.log("Matched:")
+      console.log(payment)
+      // NEED TO CHECK FOR MULTIPLE CLIENT PAYMENTS;
+      // Really just need to fix the projected end balance for each based
+      // on multiple payments
+
+      // If it alreasy exists, keep adding the total payment amounts
+      if (payment.client in duplicateTracker) {
+        duplicateTracker[payment.client] += payment.amount
+      }
+      // Track the first payment amount for duplicate payments
+      else {
+        duplicateTracker[payment.client] = payment.amount
+      }
+      
+      //tableClients.forEach(client => {
+      //    console.log(client);
+      //});
+
       const match = tableClients.find(
-        r => r.client === payment.client && r.client !== ""
+        r => (r.client === payment.client && r.client !== "")
+          && (r.startBalance === payment.balance + duplicateTracker[payment.client] && r.startBalance !== "")
       );
+      // If match in open workbook is found
+      //console.log(duplicateTracker[payment.client])
+      //console.log(match)
       if (match) {
+        const tempStartBal = match.startBalance;
+        if(payment.amount + payment.balance !== match.startBalance) {
+          match.startBalance = match.startBalance - duplicateTracker[payment.client] + payment.amount
+        }
+
         previews.push({
           client:       payment.client,
           amount:       payment.amount,
@@ -147,26 +214,27 @@ async function previewPaymentsImport() {
           projectedEnd: (Number(match.startBalance) || 0) - payment.amount,
           excelRow:     payment.excelRow,
         });
+        match.startBalance = tempStartBal
       } else {
         unmatched.push(payment.client);
       }
     }
 
-    appState.pendingPaymentRows = previews;
 
     // Build dynamic preview table with projected end balance as extra column
-    const previewHeaders = ["CLIENT", "START BALANCE", "PAYMENT AMT"];
+    const previewHeaders = ["CLIENT", "START BALANCE", "PAYMENT AMT", "PROJECTED END BAL"];
     const previewRows    = previews.map(p => [
       p.client,
       `$${Number(p.startBalance || 0).toLocaleString()}`,
       `$${p.amount.toLocaleString()}`,
+      `$${p.projectedEnd.toLocaleString() ?? "—"}`,
     ]);
-    const extraColumns = [{
-      label:    "PROJECTED END BAL",
-      getValue: (row, idx) => `$${previews[idx]?.projectedEnd?.toLocaleString() ?? "—"}`,
-    }];
+    //const extraColumns = [{
+    //  label:    "PROJECTED END BAL",
+    //  getValue: (row, idx) => `$${previews[idx]?.projectedEnd?.toLocaleString() ?? "—"}`,
+    //}];//
 
-    buildPreviewTable("preview-payments-table-container", previewHeaders, previewRows, extraColumns);
+    buildPreviewTable("preview-payments-table-container", previewHeaders, previewRows);
 
     // Show unmatched warning
     const warningEl = document.getElementById("payments-unmatched-warning");
@@ -186,6 +254,8 @@ async function previewPaymentsImport() {
       `${previews.length} payment${previews.length !== 1 ? "s" : ""} matched and ready to apply.`
     );
 
+    appState.pendingPaymentRows = previews;
+
   } catch (error) {
     hideLoading();
     setPaymentsStatus("Error: " + error.message);
@@ -194,12 +264,13 @@ async function previewPaymentsImport() {
 }
 
 async function confirmPaymentsImport() {
-  if (!pendingPaymentRows.length) return;
+  if (!appState.pendingPaymentRows.length) return;
   document.getElementById("confirm-payments-btn").disabled = true;
   showLoading("Applying payments...");
 
   const succeeded = [];
   const failed    = [];
+  let totalToPay = 0;
 
   try {
     await Excel.run(async (context) => {
@@ -240,6 +311,7 @@ async function confirmPaymentsImport() {
 
           await context.sync();
           succeeded.push(payment);
+          totalToPay += paymentCell.values[0][0]
 
         } catch (err) {
           failed.push({ payment, reason: err.message });
@@ -248,6 +320,7 @@ async function confirmPaymentsImport() {
     });
 
     let message = `✔ Applied ${succeeded.length} payment${succeeded.length !== 1 ? "s" : ""} and updated balances.`;
+    message += `\n Total to pay Employee: $${totalToPay}`;
     if (failed.length) {
       message += `\n⚠ ${failed.length} skipped:\n`;
       message += failed.map(f => `• ${f.payment.client}: ${f.reason}`).join("\n");
@@ -272,7 +345,7 @@ async function confirmPaymentsImport() {
 
 function cancelPaymentsImport() {
   appState.pendingPaymentRows = [];
-  appState.accessTokenledgerSourceRows   = [];
+  appState.ledgerSourceRows   = [];
   document.getElementById("preview-payments-section").style.display = "none";
   setPaymentsStatus("Payment import cancelled.");
 }
